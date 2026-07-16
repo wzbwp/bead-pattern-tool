@@ -17,22 +17,47 @@ const BEAD_COLOR_CODES = Object.entries(COLOR_SERIES_COUNTS).flatMap(([series, c
 const COLOR_PACKAGES = [
   {
     size: BEAD_COLOR_CODES.length,
-    label: `A-M 全色号 (${BEAD_COLOR_CODES.length})`,
+    label: `A-M 全色号 (最多 ${BEAD_COLOR_CODES.length})`,
     outputLimit: BEAD_COLOR_CODES.length
   },
-  { size: 24, label: "24 色 (24)", outputLimit: 24 },
-  { size: 48, label: "48 色 (48)", outputLimit: 48 },
-  { size: 72, label: "72 色 (72)", outputLimit: 72 }
+  { size: 72, label: "最多 72 色", outputLimit: 72 },
+  { size: 48, label: "最多 48 色", outputLimit: 48 },
+  { size: 24, label: "最多 24 色", outputLimit: 24 },
+  { size: 12, label: "最多 12 色", outputLimit: 12 },
+  { size: 8, label: "最多 8 色", outputLimit: 8 },
+  { size: 6, label: "最多 6 色", outputLimit: 6 }
 ];
 
 const KNOWN_COLOR_MATCHES = [
   {
     color: createColor("H2", "白色", { r: 255, g: 255, b: 255 }),
-    maxDelta: 3
+    maxDelta: 6
   }
 ];
 
 const RESERVED_MATCH_CODES = new Set(KNOWN_COLOR_MATCHES.map((entry) => entry.color.code));
+const WHITE_RGB = { r: 255, g: 255, b: 255 };
+// Package choices are maximums; these thresholds collapse sampling noise into real bead colors.
+const AUTO_PALETTE_POINT_DELTA = 4.8;
+const AUTO_PALETTE_ESTIMATE_DELTA = 11.5;
+const AUTO_PALETTE_FINAL_DELTA = 6.8;
+const SAMPLE_MODE_SETTINGS = {
+  enhanced: {
+    samplesPerAxis: 9,
+    detailBoost: 2.6,
+    colorBoost: 0.18
+  },
+  average: {
+    samplesPerAxis: 7,
+    detailBoost: 0,
+    colorBoost: 0.06
+  },
+  center: {
+    samplesPerAxis: 1,
+    detailBoost: 0,
+    colorBoost: 0
+  }
+};
 
 const state = {
   image: null,
@@ -45,8 +70,10 @@ const state = {
   gridHeight: 80,
   cellSize: 18,
   colorPackage: BEAD_COLOR_CODES.length,
-  sampleMode: "average",
+  sampleMode: "enhanced",
   lockRatio: true,
+  mirrorX: false,
+  mirrorY: false,
   showGrid: true,
   showCodes: false,
   averageDelta: 0
@@ -60,6 +87,8 @@ const els = {
   gridWidth: document.querySelector("#gridWidth"),
   gridHeight: document.querySelector("#gridHeight"),
   lockRatio: document.querySelector("#lockRatio"),
+  mirrorX: document.querySelector("#mirrorX"),
+  mirrorY: document.querySelector("#mirrorY"),
   sampleMode: document.querySelector("#sampleMode"),
   packageOptions: document.querySelector("#packageOptions"),
   requiredTitle: document.querySelector("#requiredTitle"),
@@ -145,6 +174,18 @@ function bindEvents() {
     scheduleParse();
   });
 
+  els.mirrorX.addEventListener("change", () => {
+    state.mirrorX = els.mirrorX.checked;
+    updateSourcePreviewTransform();
+    scheduleParse(0);
+  });
+
+  els.mirrorY.addEventListener("change", () => {
+    state.mirrorY = els.mirrorY.checked;
+    updateSourcePreviewTransform();
+    scheduleParse(0);
+  });
+
   els.sampleMode.addEventListener("change", () => {
     state.sampleMode = els.sampleMode.value;
     scheduleParse();
@@ -157,7 +198,7 @@ function bindEvents() {
     }
 
     selectColorPackage(Number(button.dataset.package));
-    scheduleParse();
+    scheduleParse(0);
   });
 
   els.cellSize.addEventListener("input", () => {
@@ -202,6 +243,7 @@ function loadFile(file) {
       preview.src = reader.result;
       preview.alt = file.name;
       els.sourcePreview.appendChild(preview);
+      updateSourcePreviewTransform();
 
       syncHeightFromRatio();
       parseImage();
@@ -214,13 +256,22 @@ function loadFile(file) {
   reader.readAsDataURL(file);
 }
 
-function scheduleParse() {
+function updateSourcePreviewTransform() {
+  const preview = els.sourcePreview.querySelector("img");
+  if (!preview) {
+    return;
+  }
+
+  preview.style.transform = `scale(${state.mirrorX ? -1 : 1}, ${state.mirrorY ? -1 : 1})`;
+}
+
+function scheduleParse(delay = 120) {
   clearTimeout(parseTimer);
   parseTimer = window.setTimeout(() => {
     if (state.image) {
       parseImage();
     }
-  }, 120);
+  }, delay);
 }
 
 function parseImage() {
@@ -230,7 +281,9 @@ function parseImage() {
 
   state.gridWidth = normalizeNumber(els.gridWidth.value, 8, 240, 80);
   state.gridHeight = normalizeNumber(els.gridHeight.value, 8, 240, 80);
-  state.sampleMode = els.sampleMode.value;
+  state.sampleMode = SAMPLE_MODE_SETTINGS[els.sampleMode.value] ? els.sampleMode.value : "enhanced";
+  state.mirrorX = els.mirrorX.checked;
+  state.mirrorY = els.mirrorY.checked;
 
   setStatus("解析中", false);
 
@@ -271,43 +324,30 @@ function sampleImageCells() {
   const cells = [];
   const cellWidth = sourceWidth / state.gridWidth;
   const cellHeight = sourceHeight / state.gridHeight;
-  const samplesPerAxis = state.sampleMode === "center" ? 1 : 5;
+  const sampleSettings = SAMPLE_MODE_SETTINGS[state.sampleMode] || SAMPLE_MODE_SETTINGS.enhanced;
 
   for (let y = 0; y < state.gridHeight; y += 1) {
     for (let x = 0; x < state.gridWidth; x += 1) {
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let samples = 0;
-
-      for (let sy = 0; sy < samplesPerAxis; sy += 1) {
-        for (let sx = 0; sx < samplesPerAxis; sx += 1) {
-          const sampleX =
-            state.sampleMode === "center"
-              ? (x + 0.5) * cellWidth
-              : (x + (sx + 0.5) / samplesPerAxis) * cellWidth;
-          const sampleY =
-            state.sampleMode === "center"
-              ? (y + 0.5) * cellHeight
-              : (y + (sy + 0.5) / samplesPerAxis) * cellHeight;
-          const pixel = getPixel(imageData, sourceWidth, sourceHeight, sampleX, sampleY);
-          r += pixel.r;
-          g += pixel.g;
-          b += pixel.b;
-          samples += 1;
-        }
-      }
-
-      const rgb = {
-        r: Math.round(r / samples),
-        g: Math.round(g / samples),
-        b: Math.round(b / samples)
-      };
+      const cell = sampleCellColor(
+        imageData,
+        sourceWidth,
+        sourceHeight,
+        cellWidth,
+        cellHeight,
+        x,
+        y,
+        sampleSettings
+      );
+      const rgb = cell.rgb;
 
       cells.push({
         rgb,
         hex: rgbToHex(rgb),
-        lab: rgbToLab(rgb)
+        lab: rgbToLab(rgb),
+        alphaCoverage: cell.alphaCoverage,
+        detailScore: cell.detailScore,
+        isBackground: cell.isBackground,
+        paletteWeight: cell.paletteWeight
       });
     }
   }
@@ -315,18 +355,190 @@ function sampleImageCells() {
   return cells;
 }
 
+function sampleCellColor(
+  data,
+  sourceWidth,
+  sourceHeight,
+  cellWidth,
+  cellHeight,
+  gridX,
+  gridY,
+  settings
+) {
+  const samples = [];
+  const samplesPerAxis = settings.samplesPerAxis;
+  let baseR = 0;
+  let baseG = 0;
+  let baseB = 0;
+  let alphaTotal = 0;
+
+  for (let sy = 0; sy < samplesPerAxis; sy += 1) {
+    for (let sx = 0; sx < samplesPerAxis; sx += 1) {
+      const offsetX = samplesPerAxis === 1 ? 0.5 : (sx + 0.5) / samplesPerAxis;
+      const offsetY = samplesPerAxis === 1 ? 0.5 : (sy + 0.5) / samplesPerAxis;
+      const sampleX = getSourceCoordinate(
+        gridX,
+        offsetX,
+        cellWidth,
+        state.gridWidth,
+        state.mirrorX
+      );
+      const sampleY = getSourceCoordinate(
+        gridY,
+        offsetY,
+        cellHeight,
+        state.gridHeight,
+        state.mirrorY
+      );
+      const pixel = getPixel(data, sourceWidth, sourceHeight, sampleX, sampleY);
+
+      samples.push(pixel);
+      baseR += pixel.rgb.r;
+      baseG += pixel.rgb.g;
+      baseB += pixel.rgb.b;
+      alphaTotal += pixel.alpha;
+    }
+  }
+
+  const sampleCount = samples.length || 1;
+  const baseRgb = {
+    r: Math.round(baseR / sampleCount),
+    g: Math.round(baseG / sampleCount),
+    b: Math.round(baseB / sampleCount)
+  };
+  const alphaCoverage = alphaTotal / sampleCount;
+
+  if (alphaCoverage < 0.025 && isNearWhite(baseRgb, 18)) {
+    return {
+      rgb: WHITE_RGB,
+      alphaCoverage,
+      detailScore: 0,
+      isBackground: true,
+      paletteWeight: 0.04
+    };
+  }
+
+  let weightedR = 0;
+  let weightedG = 0;
+  let weightedB = 0;
+  let totalWeight = 0;
+  let detailTotal = 0;
+  let maxSalience = 0;
+
+  for (const sample of samples) {
+    const salience = getPixelSalience(sample.rgb, baseRgb, sample.alpha);
+    const alphaWeight = Math.max(0.08, sample.alpha);
+    const weight = alphaWeight * (1 + settings.detailBoost * salience);
+
+    weightedR += sample.rgb.r * weight;
+    weightedG += sample.rgb.g * weight;
+    weightedB += sample.rgb.b * weight;
+    totalWeight += weight;
+    detailTotal += salience;
+    maxSalience = Math.max(maxSalience, salience);
+  }
+
+  const detailScore = Math.max(detailTotal / sampleCount, maxSalience * 0.32);
+  let rgb = totalWeight
+    ? {
+        r: Math.round(weightedR / totalWeight),
+        g: Math.round(weightedG / totalWeight),
+        b: Math.round(weightedB / totalWeight)
+      }
+    : baseRgb;
+
+  const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
+  if (isBackground) {
+    rgb = WHITE_RGB;
+  } else if (settings.colorBoost > 0) {
+    rgb = boostPatternColor(rgb, settings.colorBoost, detailScore);
+  }
+
+  return {
+    rgb,
+    alphaCoverage,
+    detailScore,
+    isBackground,
+    paletteWeight: isBackground ? 0.08 : 1 + Math.min(2.8, detailScore * 7)
+  };
+}
+
+function getSourceCoordinate(gridIndex, offset, cellSize, gridSize, mirrored) {
+  const cellPosition = mirrored ? gridSize - gridIndex - offset : gridIndex + offset;
+  return cellPosition * cellSize;
+}
+
 function getPixel(data, width, height, x, y) {
   const px = Math.max(0, Math.min(width - 1, Math.floor(x)));
   const py = Math.max(0, Math.min(height - 1, Math.floor(y)));
   const index = (py * width + px) * 4;
   const alpha = data[index + 3] / 255;
+  const rgb = blendAgainstWhite(data[index], data[index + 1], data[index + 2], alpha);
 
-  return blendAgainstWhite(data[index], data[index + 1], data[index + 2], alpha);
+  return { rgb, alpha };
+}
+
+function getPixelSalience(rgb, baseRgb, alpha) {
+  if (alpha < 0.02 && isNearWhite(rgb, 12)) {
+    return 0;
+  }
+
+  const chroma = getRgbChroma(rgb);
+  const whiteDistance = getRgbDistance(rgb, WHITE_RGB) / 441.7;
+  const localContrast = getRgbDistance(rgb, baseRgb) / 441.7;
+  const darkness = 1 - getRgbLuminance(rgb);
+
+  return clamp01(
+    alpha * (0.38 * chroma + 0.28 * whiteDistance + 0.24 * localContrast + 0.1 * darkness)
+  );
+}
+
+function boostPatternColor(rgb, boost, detailScore) {
+  if (isNearWhite(rgb, 12)) {
+    return rgb;
+  }
+
+  const hsl = rgbToHsl(rgb);
+  const detailFactor = clamp01(0.45 + detailScore * 2.4);
+  const saturationBoost = 1 + boost * (0.8 + detailFactor);
+  const contrastBoost = 1 + boost * 0.32;
+
+  hsl.s = clamp01(hsl.s * saturationBoost);
+  hsl.l = clamp01((hsl.l - 0.5) * contrastBoost + 0.5);
+
+  if (hsl.s > 0.08 && hsl.l > 0.78) {
+    hsl.l = Math.max(0.72, hsl.l - boost * 0.18);
+  }
+
+  return hslToRgb(hsl);
+}
+
+function isNearWhite(rgb, tolerance) {
+  return getRgbDistance(rgb, WHITE_RGB) <= tolerance;
+}
+
+function getRgbDistance(first, second) {
+  return Math.sqrt(
+    Math.pow(first.r - second.r, 2) +
+      Math.pow(first.g - second.g, 2) +
+      Math.pow(first.b - second.b, 2)
+  );
+}
+
+function getRgbChroma(rgb) {
+  const max = Math.max(rgb.r, rgb.g, rgb.b) / 255;
+  const min = Math.min(rgb.r, rgb.g, rgb.b) / 255;
+  return max <= 0 ? 0 : (max - min) / max;
+}
+
+function getRgbLuminance(rgb) {
+  return (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
 }
 
 function mapCellsToPattern(cells) {
+  const targetSize = getActivePaletteLimit(cells.length);
   const palette = assignBeadColorCodes(
-    buildAutoPalette(cells, getActivePaletteLimit(cells.length))
+    ensureMandatoryColors(buildAutoPalette(cells, targetSize), cells, targetSize)
   );
   const colors = [];
   let totalDistance = 0;
@@ -345,38 +557,30 @@ function mapCellsToPattern(cells) {
 }
 
 function buildAutoPalette(cells, targetSize) {
-  const points = buildWeightedPoints(cells);
-  const colorCount = Math.max(1, Math.min(targetSize, points.length));
+  const rawPoints = buildWeightedPoints(cells);
+  const points = mergeWeightedPoints(
+    compactWeightedPoints(rawPoints, AUTO_PALETTE_POINT_DELTA * 0.75),
+    AUTO_PALETTE_POINT_DELTA
+  );
+  const colorCount = getAutoPaletteColorCount(points, targetSize);
 
   if (points.length <= colorCount) {
-    return points
-      .map((point, index) => createAutoColor(point.rgb, index))
-      .sort(compareColorForDisplay);
+    return mergePaletteColors(
+      points
+        .map((point, index) => createWeightedAutoColor(point, index))
+        .sort(compareColorForDisplay),
+      AUTO_PALETTE_FINAL_DELTA
+    );
   }
 
   let centroids = initializeCentroids(points, colorCount);
 
   for (let iteration = 0; iteration < 8; iteration += 1) {
-    const clusters = centroids.map(() => ({
-      weight: 0,
-      l: 0,
-      a: 0,
-      b: 0,
-      r: 0,
-      g: 0,
-      blue: 0
-    }));
+    const clusters = centroids.map(() => createEmptyColorCluster());
 
     for (const point of points) {
       const index = nearestCentroidIndex(point.lab, centroids);
-      const cluster = clusters[index];
-      cluster.weight += point.weight;
-      cluster.l += point.lab.l * point.weight;
-      cluster.a += point.lab.a * point.weight;
-      cluster.b += point.lab.b * point.weight;
-      cluster.r += point.rgb.r * point.weight;
-      cluster.g += point.rgb.g * point.weight;
-      cluster.blue += point.rgb.b * point.weight;
+      addPointToColorCluster(clusters[index], point);
     }
 
     centroids = centroids.map((centroid, index) => {
@@ -385,25 +589,188 @@ function buildAutoPalette(cells, targetSize) {
         return farthestPoint(points, centroids);
       }
 
-      const rgb = {
-        r: Math.round(cluster.r / cluster.weight),
-        g: Math.round(cluster.g / cluster.weight),
-        b: Math.round(cluster.blue / cluster.weight)
-      };
-
-      return {
-        rgb,
-        lab: {
-          l: cluster.l / cluster.weight,
-          a: cluster.a / cluster.weight,
-          b: cluster.b / cluster.weight
-        }
-      };
+      return finalizeColorCluster(cluster);
     });
   }
 
-  return centroids
-    .map((centroid, index) => createAutoColor(centroid.rgb, index))
+  return mergePaletteColors(
+    centroids
+      .map((point, index) => createWeightedAutoColor(point, index))
+      .sort(compareColorForDisplay),
+    AUTO_PALETTE_FINAL_DELTA
+  );
+}
+
+function getAutoPaletteColorCount(points, targetSize) {
+  const maxCount = Math.max(1, Math.min(targetSize, points.length));
+  if (maxCount <= 1) {
+    return maxCount;
+  }
+
+  const estimatedPoints = mergeWeightedPoints(points, AUTO_PALETTE_ESTIMATE_DELTA);
+  return Math.max(1, Math.min(maxCount, estimatedPoints.length));
+}
+
+function mergePaletteColors(palette, maxDelta) {
+  if (palette.length <= 1) {
+    return palette;
+  }
+
+  return mergeWeightedPoints(
+    palette.map((color) => ({
+      rgb: color.rgb,
+      lab: color.lab,
+      weight: color.weight || 1
+    })),
+    maxDelta
+  )
+    .map((point, index) => createWeightedAutoColor(point, index))
+    .sort(compareColorForDisplay);
+}
+
+function createWeightedAutoColor(point, index) {
+  return {
+    ...createAutoColor(point.rgb, index),
+    weight: point.weight || 1
+  };
+}
+
+function mergeWeightedPoints(points, maxDelta) {
+  if (points.length <= 1 || maxDelta <= 0) {
+    return points;
+  }
+
+  const maxDistance = maxDelta * maxDelta;
+  const groups = [];
+  const sortedPoints = [...points].sort((a, b) => b.weight - a.weight);
+
+  for (const point of sortedPoints) {
+    let closestGroup = null;
+    let closestDistance = maxDistance;
+
+    for (const group of groups) {
+      const distance = labDistanceSquared(point.lab, group.lab);
+      if (distance <= closestDistance) {
+        closestGroup = group;
+        closestDistance = distance;
+      }
+    }
+
+    if (closestGroup) {
+      addPointToColorCluster(closestGroup, point);
+    } else {
+      const group = createEmptyColorCluster();
+      addPointToColorCluster(group, point);
+      groups.push(group);
+    }
+  }
+
+  return groups.map(finalizeColorCluster);
+}
+
+function compactWeightedPoints(points, bucketSize) {
+  if (points.length <= 1 || bucketSize <= 0) {
+    return points;
+  }
+
+  const buckets = new Map();
+
+  for (const point of points) {
+    const key = getLabBucketKey(point.lab, bucketSize);
+    const bucket = buckets.get(key);
+
+    if (bucket) {
+      addPointToColorCluster(bucket, point);
+    } else {
+      const group = createEmptyColorCluster();
+      addPointToColorCluster(group, point);
+      buckets.set(key, group);
+    }
+  }
+
+  return [...buckets.values()].map(finalizeColorCluster);
+}
+
+function getLabBucketKey(lab, bucketSize) {
+  const safeSize = Math.max(1, bucketSize);
+  return [
+    Math.round(lab.l / safeSize),
+    Math.round((lab.a + 128) / safeSize),
+    Math.round((lab.b + 128) / safeSize)
+  ].join(":");
+}
+
+function createEmptyColorCluster() {
+  return {
+    weight: 0,
+    l: 0,
+    a: 0,
+    b: 0,
+    r: 0,
+    g: 0,
+    blue: 0,
+    rgb: WHITE_RGB,
+    lab: rgbToLab(WHITE_RGB)
+  };
+}
+
+function addPointToColorCluster(cluster, point) {
+  cluster.weight += point.weight;
+  cluster.l += point.lab.l * point.weight;
+  cluster.a += point.lab.a * point.weight;
+  cluster.b += point.lab.b * point.weight;
+  cluster.r += point.rgb.r * point.weight;
+  cluster.g += point.rgb.g * point.weight;
+  cluster.blue += point.rgb.b * point.weight;
+  updateColorClusterCenter(cluster);
+}
+
+function updateColorClusterCenter(cluster) {
+  if (!cluster.weight) {
+    return;
+  }
+
+  cluster.rgb = {
+    r: Math.round(cluster.r / cluster.weight),
+    g: Math.round(cluster.g / cluster.weight),
+    b: Math.round(cluster.blue / cluster.weight)
+  };
+  cluster.lab = {
+    l: cluster.l / cluster.weight,
+    a: cluster.a / cluster.weight,
+    b: cluster.b / cluster.weight
+  };
+}
+
+function finalizeColorCluster(cluster) {
+  return {
+    rgb: {
+      r: clampChannel(cluster.r / cluster.weight),
+      g: clampChannel(cluster.g / cluster.weight),
+      b: clampChannel(cluster.blue / cluster.weight)
+    },
+    lab: {
+      l: cluster.l / cluster.weight,
+      a: cluster.a / cluster.weight,
+      b: cluster.b / cluster.weight
+    },
+    weight: cluster.weight
+  };
+}
+
+function ensureMandatoryColors(palette, cells, targetSize) {
+  const needsWhite = cells.some((cell) => cell.isBackground || isNearWhite(cell.rgb, 12));
+  if (!needsWhite) {
+    return palette;
+  }
+
+  const white = cloneColor(KNOWN_COLOR_MATCHES[0].color);
+  const paletteWithoutWhite = palette.filter(
+    (color) => color.code !== white.code && color.hex !== white.hex
+  );
+
+  return [white, ...paletteWithoutWhite]
+    .slice(0, Math.max(1, targetSize))
     .sort(compareColorForDisplay);
 }
 
@@ -413,13 +780,14 @@ function buildWeightedPoints(cells) {
   for (const cell of cells) {
     const key = cell.hex;
     const existing = map.get(key);
+    const weight = Math.max(0.03, cell.paletteWeight || 1);
     if (existing) {
-      existing.weight += 1;
+      existing.weight += weight;
     } else {
       map.set(key, {
         rgb: cell.rgb,
         lab: cell.lab,
-        weight: 1
+        weight
       });
     }
   }
@@ -580,7 +948,7 @@ function drawPattern() {
   els.resultTitle.textContent = `${state.imageName || "未命名图片"} · ${state.gridWidth} x ${state.gridHeight}`;
   els.summaryStrip.innerHTML = `<span>${state.stats.length} 色</span><span>${
     state.gridWidth * state.gridHeight
-  } 颗</span><span>ΔE ${state.averageDelta.toFixed(1)}</span>`;
+  } 颗</span><span>上限 ${state.colorPackage} 色</span><span>ΔE ${state.averageDelta.toFixed(1)}</span>`;
 }
 
 function drawGrid(width, height, cell) {
@@ -648,7 +1016,7 @@ function getEmptyCanvasSize() {
 function renderStats() {
   els.paletteList.innerHTML = "";
   const totalCount = state.gridWidth * state.gridHeight;
-  els.paletteMeta.textContent = `${state.stats.length} 个颜色 · 总计 ${totalCount} 颗 · 平均色差 ΔE ${state.averageDelta.toFixed(1)}`;
+  els.paletteMeta.textContent = `${state.stats.length} 个颜色 · 上限 ${state.colorPackage} 色 · 总计 ${totalCount} 颗 · 平均色差 ΔE ${state.averageDelta.toFixed(1)}`;
 
   const fragment = document.createDocumentFragment();
   state.stats.forEach((item) => {
@@ -789,7 +1157,7 @@ function drawLegendForExport(exportCtx, options) {
   exportCtx.textAlign = "left";
   exportCtx.textBaseline = "middle";
   exportCtx.fillText(
-    `所需颜色：${state.stats.length} 种 / 总计 ${totalCount} 颗 / 套餐 ${state.colorPackage} 色`,
+    `所需颜色：${state.stats.length} 种 / 总计 ${totalCount} 颗 / 上限 ${state.colorPackage} 色`,
     padding,
     top + 32
   );
@@ -841,6 +1209,11 @@ function exportJson() {
     source: state.imageName,
     scheme: "default",
     colorPackage: state.colorPackage,
+    sampleMode: state.sampleMode,
+    mirror: {
+      horizontal: state.mirrorX,
+      vertical: state.mirrorY
+    },
     averageDelta: Number(state.averageDelta.toFixed(3)),
     grid: {
       width: state.gridWidth,
@@ -1024,6 +1397,60 @@ function toHex(value) {
   return clampChannel(value).toString(16).padStart(2, "0");
 }
 
+function rgbToHsl({ r, g, b }) {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  let h = 0;
+  const l = (max + min) / 2;
+  const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1));
+
+  if (delta !== 0) {
+    if (max === red) {
+      h = ((green - blue) / delta) % 6;
+    } else if (max === green) {
+      h = (blue - red) / delta + 2;
+    } else {
+      h = (red - green) / delta + 4;
+    }
+    h /= 6;
+    if (h < 0) {
+      h += 1;
+    }
+  }
+
+  return { h, s, l };
+}
+
+function hslToRgb({ h, s, l }) {
+  const hueToRgb = (p, q, t) => {
+    let value = t;
+    if (value < 0) value += 1;
+    if (value > 1) value -= 1;
+    if (value < 1 / 6) return p + (q - p) * 6 * value;
+    if (value < 1 / 2) return q;
+    if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
+    return p;
+  };
+
+  if (s === 0) {
+    const gray = clampChannel(l * 255);
+    return { r: gray, g: gray, b: gray };
+  }
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+
+  return {
+    r: clampChannel(hueToRgb(p, q, h + 1 / 3) * 255),
+    g: clampChannel(hueToRgb(p, q, h) * 255),
+    b: clampChannel(hueToRgb(p, q, h - 1 / 3) * 255)
+  };
+}
+
 function rgbToLab({ r, g, b }) {
   const [x, y, z] = rgbToXyz(r, g, b);
   const xn = 95.047;
@@ -1125,6 +1552,10 @@ function normalizeNumber(value, min, max, fallback) {
 
 function clampChannel(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function baseFileName() {
