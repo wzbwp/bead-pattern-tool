@@ -1,0 +1,17 @@
+{
+  "name": "bead-pattern-tool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A static browser app that converts images into bead pattern color charts.",
+  "scripts": {
+    "dev": "python3 -m http.server 5173",
+    "build": "node -e \"console.log('Static app: no build step required.')\""
+  },
+  "keywords": [
+    "beads",
+    "pattern",
+    "canvas",
+    "static-site"
+  ],
+  "license": "MIT"
+}

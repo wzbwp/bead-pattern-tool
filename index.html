@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="纯前端拼豆图纸解析工具，上传图片后解析为拼豆色号和小色块图纸。"
+    />
+    <title>拼豆图纸解析工具</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=am-221-3" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Bead Pattern Tool</p>
+          <h1>拼豆图纸解析工具</h1>
+        </div>
+        <div class="status-pill" id="statusPill">等待图片</div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-panel" aria-label="解析设置">
+          <section class="panel-section">
+            <div class="section-title">图片</div>
+            <label class="dropzone" id="dropzone">
+              <input id="imageInput" type="file" accept="image/*" />
+              <span class="drop-icon" aria-hidden="true">+</span>
+              <span class="drop-title">选择或拖入图片</span>
+              <span class="drop-meta" id="fileMeta">PNG / JPG / WebP</span>
+            </label>
+            <div class="source-preview" id="sourcePreview">
+              <span>未选择图片</span>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-title">图纸</div>
+            <label class="field">
+              <span>宽度颗数</span>
+              <input id="gridWidth" type="number" min="8" max="240" value="80" />
+            </label>
+            <label class="field">
+              <span>高度颗数</span>
+              <input id="gridHeight" type="number" min="8" max="240" value="80" />
+            </label>
+            <label class="check-row">
+              <input id="lockRatio" type="checkbox" checked />
+              <span>锁定原图比例</span>
+            </label>
+            <label class="field">
+              <span>采样方式</span>
+              <select id="sampleMode">
+                <option value="average">区域平均</option>
+                <option value="center">中心取样</option>
+              </select>
+            </label>
+            <div class="config-group">
+              <div class="section-title compact">配色方案</div>
+              <button class="scheme-button active" type="button">默认</button>
+            </div>
+            <div class="config-group">
+              <div class="section-title compact">颜色套餐（颜色数量）</div>
+              <div class="package-options" id="packageOptions" role="radiogroup">
+                <button class="package-option active" type="button" data-package="221">
+                  A-M 全色号 (221)
+                </button>
+                <button class="package-option" type="button" data-package="24">24 色 (24)</button>
+                <button class="package-option" type="button" data-package="48">48 色 (48)</button>
+                <button class="package-option" type="button" data-package="72">72 色 (72)</button>
+              </div>
+            </div>
+            <div class="required-colors">
+              <div class="required-title" id="requiredTitle">暂无所需颜色</div>
+              <div class="required-list" id="requiredList"></div>
+            </div>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-title">显示</div>
+            <label class="field">
+              <span>色块大小</span>
+              <input id="cellSize" type="range" min="10" max="30" value="18" />
+            </label>
+            <label class="check-row">
+              <input id="showGrid" type="checkbox" checked />
+              <span>网格线</span>
+            </label>
+            <label class="check-row">
+              <input id="showCodes" type="checkbox" />
+              <span>显示色号</span>
+            </label>
+          </section>
+
+          <section class="panel-section">
+            <div class="section-title">导出</div>
+            <div class="button-grid">
+              <button class="button primary" id="exportPng" type="button" disabled>PNG</button>
+              <button class="button" id="exportCsv" type="button" disabled>CSV</button>
+              <button class="button" id="exportJson" type="button" disabled>JSON</button>
+            </div>
+          </section>
+        </aside>
+
+        <section class="result-panel" aria-label="解析结果">
+          <div class="result-toolbar">
+            <div>
+              <p class="eyebrow">Pattern Preview</p>
+              <h2 id="resultTitle">上传图片后生成图纸</h2>
+            </div>
+            <div class="summary-strip" id="summaryStrip">
+              <span>0 色</span>
+              <span>0 颗</span>
+            </div>
+          </div>
+
+          <div class="canvas-stage" id="canvasStage">
+            <canvas id="patternCanvas" width="720" height="540"></canvas>
+            <div class="empty-state" id="emptyState">
+              <strong>等待图片</strong>
+              <span>图纸会显示在这里</span>
+            </div>
+          </div>
+
+          <div class="palette-panel">
+            <div class="palette-header">
+              <h2>用色清单</h2>
+              <span id="paletteMeta">暂无数据</span>
+            </div>
+            <div class="palette-list" id="paletteList"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./assets/app.js?v=am-221-3" defer></script>
+  </body>
+</html>
