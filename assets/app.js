@@ -43,20 +43,23 @@ const WHITE_RGB = { r: 255, g: 255, b: 255 };
 const AUTO_PALETTE_POINT_DELTA = 4.8;
 const AUTO_PALETTE_ESTIMATE_DELTA = 11.5;
 const AUTO_PALETTE_FINAL_DELTA = 6.8;
-const OUTLINE_COLOR_DISTANCE = 36;
-const OUTLINE_EDGE_BAND = 2;
+const OUTLINE_COLOR_DISTANCE = 44;
+const OUTLINE_MAX_SOURCE_DELTA = 20;
+const WHITE_DETAIL_LUMINANCE = 0.9;
+const WHITE_DETAIL_CHROMA = 0.08;
+const WHITE_DETAIL_COVERAGE = 0.28;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
   enhanced: {
-    samplesPerAxis: 13,
-    detailBoost: 3.2,
-    colorBoost: 0.2
+    samplesPerAxis: 9,
+    detailBoost: 2.6,
+    colorBoost: 0.18
   },
   average: {
-    samplesPerAxis: 9,
-    detailBoost: 0.2,
-    colorBoost: 0.08
+    samplesPerAxis: 7,
+    detailBoost: 0,
+    colorBoost: 0.06
   },
   center: {
     samplesPerAxis: 1,
@@ -411,6 +414,7 @@ function sampleImageCells() {
         hex: rgbToHex(rgb),
         lab: rgbToLab(rgb),
         alphaCoverage: cell.alphaCoverage,
+        whiteDetailCoverage: cell.whiteDetailCoverage,
         detailScore: cell.detailScore,
         isBackground: cell.isBackground,
         paletteWeight: cell.paletteWeight
@@ -453,6 +457,7 @@ function sampleCellColor(
   let baseG = 0;
   let baseB = 0;
   let alphaTotal = 0;
+  let whiteDetailSamples = 0;
 
   for (let sy = 0; sy < samplesPerAxis; sy += 1) {
     for (let sx = 0; sx < samplesPerAxis; sx += 1) {
@@ -479,6 +484,12 @@ function sampleCellColor(
       baseG += pixel.rgb.g;
       baseB += pixel.rgb.b;
       alphaTotal += pixel.alpha;
+      if (
+        getRgbLuminance(pixel.rgb) >= WHITE_DETAIL_LUMINANCE &&
+        getRgbChroma(pixel.rgb) <= WHITE_DETAIL_CHROMA
+      ) {
+        whiteDetailSamples += 1;
+      }
     }
   }
 
@@ -489,11 +500,13 @@ function sampleCellColor(
     b: Math.round(baseB / sampleCount)
   };
   const alphaCoverage = alphaTotal / sampleCount;
+  const whiteDetailCoverage = whiteDetailSamples / sampleCount;
 
   if (alphaCoverage < 0.025 && isNearWhite(baseRgb, 18)) {
     return {
       rgb: WHITE_RGB,
       alphaCoverage,
+      whiteDetailCoverage,
       detailScore: 0,
       isBackground: true,
       paletteWeight: 0.04
@@ -529,12 +542,6 @@ function sampleCellColor(
       }
     : baseRgb;
 
-  const dominant = getDominantSampleColor(samples, baseRgb);
-  if (dominant) {
-    const blend = clamp01(0.28 + detailScore * 1.6 + dominant.coverage * 0.45);
-    rgb = blendRgb(rgb, dominant.rgb, blend);
-  }
-
   const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
   if (isBackground) {
     rgb = WHITE_RGB;
@@ -545,64 +552,10 @@ function sampleCellColor(
   return {
     rgb,
     alphaCoverage,
+    whiteDetailCoverage,
     detailScore,
     isBackground,
-    paletteWeight: isBackground ? 0.08 : 1 + Math.min(2.8, detailScore * 7)
-  };
-}
-
-function getDominantSampleColor(samples, baseRgb) {
-  const clusters = new Map();
-
-  for (const sample of samples) {
-    if (sample.alpha < 0.03) {
-      continue;
-    }
-
-    const rgb = sample.rgb;
-    if (isNearWhite(rgb, 18) && isNearWhite(baseRgb, 18)) {
-      continue;
-    }
-
-    const salience = getPixelSalience(rgb, baseRgb, sample.alpha);
-    const weight = Math.max(0.12, sample.alpha) * (0.65 + salience * 2.8);
-    const key = `${Math.round(rgb.r / 16)}:${Math.round(rgb.g / 16)}:${Math.round(rgb.b / 16)}`;
-    const existing = clusters.get(key);
-
-    if (existing) {
-      existing.weight += weight;
-      existing.r += rgb.r * weight;
-      existing.g += rgb.g * weight;
-      existing.b += rgb.b * weight;
-    } else {
-      clusters.set(key, {
-        weight,
-        r: rgb.r * weight,
-        g: rgb.g * weight,
-        b: rgb.b * weight
-      });
-    }
-  }
-
-  let best = null;
-  for (const cluster of clusters.values()) {
-    if (!best || cluster.weight > best.weight) {
-      best = cluster;
-    }
-  }
-
-  if (!best || best.weight < 0.48) {
-    return null;
-  }
-
-  const totalWeight = samples.reduce((sum, sample) => sum + Math.max(0.12, sample.alpha), 0) || 1;
-  return {
-    rgb: {
-      r: Math.round(best.r / best.weight),
-      g: Math.round(best.g / best.weight),
-      b: Math.round(best.b / best.weight)
-    },
-    coverage: best.weight / totalWeight
+    paletteWeight: isBackground ? 0.08 : 1 + Math.min(1.6, detailScore * 4)
   };
 }
 
@@ -700,14 +653,38 @@ function mapCellsToPattern(cells) {
 }
 
 function refinePatternColors(colors, cells) {
-  const outlineColor = detectOutlineColor(colors, cells);
-  if (!outlineColor) {
-    return colors;
-  }
-
   const refined = colors.map((color) => cloneColor(color));
   const width = state.gridWidth;
   const height = state.gridHeight;
+  const exteriorBackground = getExteriorBackgroundMask(refined, cells, width, height);
+
+  restoreEnclosedWhiteDetails(refined, cells, exteriorBackground, width, height);
+
+  const mainSubject = getLargestForegroundComponent(exteriorBackground, width, height);
+  const boundaryDepth = getBoundaryDepth(mainSubject, width, height, 2);
+  const outline = detectOutlineColor(refined, cells, mainSubject, boundaryDepth);
+  if (!outline) {
+    return refined;
+  }
+
+  for (let index = 0; index < refined.length; index += 1) {
+    const depth = boundaryDepth[index];
+    if (!depth || isProtectedWhiteDetail(refined[index], exteriorBackground[index])) {
+      continue;
+    }
+
+    const sourceDelta = Math.sqrt(labDistanceSquared(cells[index].lab, outline.sourceLab));
+    const mappedDistance = getRgbDistance(refined[index].rgb, outline.color.rgb);
+    const shouldUnify =
+      (depth === 1 && sourceDelta <= OUTLINE_MAX_SOURCE_DELTA * 1.8) ||
+      (depth === 2 &&
+        sourceDelta <= OUTLINE_MAX_SOURCE_DELTA &&
+        mappedDistance <= OUTLINE_COLOR_DISTANCE * 1.5);
+
+    if (shouldUnify) {
+      refined[index] = cloneColor(outline.color);
+    }
+  }
 
   for (let iteration = 0; iteration < 2; iteration += 1) {
     let changed = false;
@@ -718,32 +695,21 @@ function refinePatternColors(colors, cells) {
       const color = refined[index];
       const cell = cells[index];
 
-      if (isOutlineLikeCell(color, outlineColor)) {
-        if (!isBoundaryLikePosition(refined, cells, x, y, width, height)) {
-          continue;
-        }
-
-        if (color.code !== outlineColor.code || color.hex !== outlineColor.hex) {
-          refined[index] = cloneColor(outlineColor);
-          changed = true;
-        }
-        continue;
-      }
-
-      if (!isBackgroundLikeCell(color, cell)) {
+      if (!exteriorBackground[index] || !isBackgroundLikeCell(color, cell)) {
         continue;
       }
 
       const neighbors = getNeighborIndices(x, y, width, height);
       const outlineHits = neighbors.filter((neighborIndex) =>
-        isOutlineLikeCell(refined[neighborIndex], outlineColor)
+        isSameColor(refined[neighborIndex], outline.color)
       ).length;
       const oppositeHits =
-        hasOppositeOutline(refined, x, y, width, height, outlineColor) ||
-        hasDiagonalOutline(refined, x, y, width, height, outlineColor);
+        hasOppositeOutline(refined, x, y, width, height, outline.color) ||
+        hasDiagonalOutline(refined, x, y, width, height, outline.color);
 
       if (outlineHits >= 2 || oppositeHits) {
-        refined[index] = cloneColor(outlineColor);
+        refined[index] = cloneColor(outline.color);
+        exteriorBackground[index] = false;
         changed = true;
       }
     }
@@ -756,48 +722,174 @@ function refinePatternColors(colors, cells) {
   return refined;
 }
 
-function detectOutlineColor(colors, cells) {
+function getExteriorBackgroundMask(colors, cells, width, height) {
+  const mask = new Array(colors.length).fill(false);
+  const queue = [];
+
+  const enqueue = (index) => {
+    if (mask[index] || !isBackgroundLikeCell(colors[index], cells[index])) {
+      return;
+    }
+    mask[index] = true;
+    queue.push(index);
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueue(x);
+    enqueue((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueue(y * width);
+    enqueue(y * width + width - 1);
+  }
+
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const index = queue[cursor];
+    const x = index % width;
+    const y = Math.floor(index / width);
+    for (const neighborIndex of getNeighborIndices(x, y, width, height)) {
+      enqueue(neighborIndex);
+    }
+  }
+
+  return mask;
+}
+
+function restoreEnclosedWhiteDetails(colors, cells, exteriorBackground, width, height) {
+  const white = KNOWN_COLOR_MATCHES[0].color;
+
+  for (let index = 0; index < colors.length; index += 1) {
+    if (exteriorBackground[index] || colors[index].code === white.code) {
+      continue;
+    }
+
+    const sourceRgb = cells[index].rgb;
+    const isBrightNeutral =
+      cells[index].whiteDetailCoverage >= WHITE_DETAIL_COVERAGE ||
+      (getRgbLuminance(sourceRgb) >= WHITE_DETAIL_LUMINANCE &&
+        getRgbChroma(sourceRgb) <= WHITE_DETAIL_CHROMA);
+    if (!isBrightNeutral) {
+      continue;
+    }
+
+    const x = index % width;
+    const y = Math.floor(index / width);
+    const enclosedNeighbors = getNeighborIndices(x, y, width, height).filter(
+      (neighborIndex) => !exteriorBackground[neighborIndex]
+    ).length;
+    if (enclosedNeighbors >= 3) {
+      colors[index] = cloneColor(white);
+    }
+  }
+}
+
+function getLargestForegroundComponent(exteriorBackground, width, height) {
+  const visited = new Array(exteriorBackground.length).fill(false);
+  let largest = [];
+
+  for (let start = 0; start < exteriorBackground.length; start += 1) {
+    if (exteriorBackground[start] || visited[start]) {
+      continue;
+    }
+
+    const component = [];
+    const queue = [start];
+    visited[start] = true;
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const index = queue[cursor];
+      component.push(index);
+      const x = index % width;
+      const y = Math.floor(index / width);
+      for (const neighborIndex of getNeighborIndices(x, y, width, height)) {
+        if (!exteriorBackground[neighborIndex] && !visited[neighborIndex]) {
+          visited[neighborIndex] = true;
+          queue.push(neighborIndex);
+        }
+      }
+    }
+
+    if (component.length > largest.length) {
+      largest = component;
+    }
+  }
+
+  const mask = new Array(exteriorBackground.length).fill(false);
+  for (const index of largest) {
+    mask[index] = true;
+  }
+  return mask;
+}
+
+function getBoundaryDepth(subjectMask, width, height, maxDepth) {
+  const depth = new Array(subjectMask.length).fill(0);
+  let frontier = [];
+
+  for (let index = 0; index < subjectMask.length; index += 1) {
+    if (!subjectMask[index]) {
+      continue;
+    }
+    const x = index % width;
+    const y = Math.floor(index / width);
+    const touchesOutside =
+      x === 0 ||
+      y === 0 ||
+      x === width - 1 ||
+      y === height - 1 ||
+      getNeighborIndices(x, y, width, height).some((neighborIndex) => !subjectMask[neighborIndex]);
+    if (touchesOutside) {
+      depth[index] = 1;
+      frontier.push(index);
+    }
+  }
+
+  for (let currentDepth = 2; currentDepth <= maxDepth; currentDepth += 1) {
+    const next = [];
+    for (const index of frontier) {
+      const x = index % width;
+      const y = Math.floor(index / width);
+      for (const neighborIndex of getNeighborIndices(x, y, width, height)) {
+        if (subjectMask[neighborIndex] && depth[neighborIndex] === 0) {
+          depth[neighborIndex] = currentDepth;
+          next.push(neighborIndex);
+        }
+      }
+    }
+    frontier = next;
+  }
+
+  return depth;
+}
+
+function detectOutlineColor(colors, cells, subjectMask, boundaryDepth) {
   const counts = new Map();
 
   for (let index = 0; index < colors.length; index += 1) {
+    if (!subjectMask[index] || boundaryDepth[index] < 1 || boundaryDepth[index] > 2) {
+      continue;
+    }
+
     const color = colors[index];
     const cell = cells[index];
-    if (isBackgroundLikeCell(color, cell)) {
+    if (isBackgroundLikeCell(color, cell) || getRgbLuminance(cell.rgb) > 0.92) {
       continue;
     }
 
-    const neighbors = getNeighborIndices(
-      index % state.gridWidth,
-      Math.floor(index / state.gridWidth),
-      state.gridWidth,
-      state.gridHeight
-    );
-    const backgroundNeighbors = neighbors.filter((neighborIndex) =>
-      isBackgroundLikeCell(colors[neighborIndex], cells[neighborIndex])
-    ).length;
-    const edgeScore = getEdgeScore(index, state.gridWidth, state.gridHeight);
-    if (edgeScore <= 0 && backgroundNeighbors <= 0) {
-      continue;
-    }
-
-    const weight = 1 + edgeScore * 1.3 + backgroundNeighbors * 0.6;
-    const key = `${Math.round(color.rgb.r / 12)}:${Math.round(color.rgb.g / 12)}:${Math.round(
-      color.rgb.b / 12
-    )}`;
+    const depthWeight = boundaryDepth[index] === 1 ? 1 : 0.82;
+    const weight = depthWeight * (0.8 + (1 - getRgbLuminance(cell.rgb)) * 1.8);
+    const key = color.code || color.hex;
     const existing = counts.get(key);
     if (existing) {
       existing.weight += weight;
-      existing.r += color.rgb.r * weight;
-      existing.g += color.rgb.g * weight;
-      existing.b += color.rgb.b * weight;
+      existing.l += cell.lab.l * weight;
+      existing.a += cell.lab.a * weight;
+      existing.b += cell.lab.b * weight;
     } else {
       counts.set(key, {
         weight,
-        code: color.code,
-        name: color.name,
-        r: color.rgb.r * weight,
-        g: color.rgb.g * weight,
-        b: color.rgb.b * weight
+        color,
+        l: cell.lab.l * weight,
+        a: cell.lab.a * weight,
+        b: cell.lab.b * weight
       });
     }
   }
@@ -813,21 +905,22 @@ function detectOutlineColor(colors, cells) {
     return null;
   }
 
-  return createColor(best.code, best.name, {
-    r: Math.round(best.r / best.weight),
-    g: Math.round(best.g / best.weight),
-    b: Math.round(best.b / best.weight)
-  });
+  return {
+    color: cloneColor(best.color),
+    sourceLab: {
+      l: best.l / best.weight,
+      a: best.a / best.weight,
+      b: best.b / best.weight
+    }
+  };
 }
 
-function isOutlineLikeCell(color, outlineColor) {
-  if (!color || !outlineColor) {
-    return false;
-  }
+function isProtectedWhiteDetail(color, isExteriorBackground) {
+  return !isExteriorBackground && color?.code === KNOWN_COLOR_MATCHES[0].color.code;
+}
 
-  const codeMatch = color.code === outlineColor.code && color.code;
-  const distance = getRgbDistance(color.rgb, outlineColor.rgb);
-  return codeMatch || distance <= OUTLINE_COLOR_DISTANCE;
+function isSameColor(first, second) {
+  return Boolean(first && second && first.code === second.code && first.hex === second.hex);
 }
 
 function isBackgroundLikeCell(color, cell) {
@@ -840,27 +933,6 @@ function isBackgroundLikeCell(color, cell) {
       isNearWhite(color.rgb, 18) ||
       color.code === KNOWN_COLOR_MATCHES[0].color.code
   );
-}
-
-function isBoundaryLikePosition(colors, cells, x, y, width, height) {
-  const index = y * width + x;
-  if (getEdgeScore(index, width, height) > 0) {
-    return true;
-  }
-
-  return getNeighborIndices(x, y, width, height).some((neighborIndex) =>
-    isBackgroundLikeCell(colors[neighborIndex], cells[neighborIndex])
-  );
-}
-
-function getEdgeScore(index, width, height) {
-  const x = index % width;
-  const y = Math.floor(index / width);
-  const left = x;
-  const right = width - 1 - x;
-  const top = y;
-  const bottom = height - 1 - y;
-  return Math.max(0, OUTLINE_EDGE_BAND - Math.min(left, right, top, bottom) + 1);
 }
 
 function getNeighborIndices(x, y, width, height) {
@@ -882,26 +954,26 @@ function getNeighborIndices(x, y, width, height) {
 }
 
 function hasOppositeOutline(colors, x, y, width, height, outlineColor) {
-  const left = x > 0 && isOutlineLikeCell(colors[y * width + (x - 1)], outlineColor);
-  const right = x < width - 1 && isOutlineLikeCell(colors[y * width + (x + 1)], outlineColor);
-  const up = y > 0 && isOutlineLikeCell(colors[(y - 1) * width + x], outlineColor);
-  const down = y < height - 1 && isOutlineLikeCell(colors[(y + 1) * width + x], outlineColor);
+  const left = x > 0 && isSameColor(colors[y * width + (x - 1)], outlineColor);
+  const right = x < width - 1 && isSameColor(colors[y * width + (x + 1)], outlineColor);
+  const up = y > 0 && isSameColor(colors[(y - 1) * width + x], outlineColor);
+  const down = y < height - 1 && isSameColor(colors[(y + 1) * width + x], outlineColor);
   return (left && right) || (up && down);
 }
 
 function hasDiagonalOutline(colors, x, y, width, height, outlineColor) {
   const topLeft =
-    x > 0 && y > 0 && isOutlineLikeCell(colors[(y - 1) * width + (x - 1)], outlineColor);
+    x > 0 && y > 0 && isSameColor(colors[(y - 1) * width + (x - 1)], outlineColor);
   const topRight =
-    x < width - 1 && y > 0 && isOutlineLikeCell(colors[(y - 1) * width + (x + 1)], outlineColor);
+    x < width - 1 && y > 0 && isSameColor(colors[(y - 1) * width + (x + 1)], outlineColor);
   const bottomLeft =
     x > 0 &&
     y < height - 1 &&
-    isOutlineLikeCell(colors[(y + 1) * width + (x - 1)], outlineColor);
+    isSameColor(colors[(y + 1) * width + (x - 1)], outlineColor);
   const bottomRight =
     x < width - 1 &&
     y < height - 1 &&
-    isOutlineLikeCell(colors[(y + 1) * width + (x + 1)], outlineColor);
+    isSameColor(colors[(y + 1) * width + (x + 1)], outlineColor);
   return (topLeft && bottomRight) || (topRight && bottomLeft);
 }
 
