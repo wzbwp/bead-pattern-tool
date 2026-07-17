@@ -8,7 +8,7 @@
       content="纯前端拼豆图纸解析工具，上传图片后解析为拼豆色号和小色块图纸。"
     />
     <title>拼豆图纸解析工具</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=recognition-3" />
+    <link rel="stylesheet" href="./assets/styles.css?v=outline-4" />
   </head>
   <body>
     <div class="app-shell">
@@ -34,7 +34,7 @@
               <span>未选择图片</span>
             </div>
             <label class="field">
-              <span>图片缩放</span>
+              <span>原图取景缩放</span>
               <input id="imageScale" type="range" min="50" max="300" value="100" />
             </label>
             <label class="field">
@@ -112,10 +112,6 @@
 
           <section class="panel-section">
             <div class="section-title">显示</div>
-            <label class="field">
-              <span>色块大小</span>
-              <input id="cellSize" type="range" min="10" max="30" value="18" />
-            </label>
             <label class="check-row">
               <input id="showGrid" type="checkbox" checked />
               <span>网格线</span>
@@ -141,6 +137,20 @@
             <div>
               <p class="eyebrow">Pattern Preview</p>
               <h2 id="resultTitle">上传图片后生成图纸</h2>
+              <div class="preview-zoom" aria-label="图例缩放">
+                <span>图例缩放</span>
+                <button id="zoomOut" type="button" title="缩小图例" aria-label="缩小图例">−</button>
+                <input
+                  id="cellSize"
+                  type="range"
+                  min="6"
+                  max="30"
+                  value="18"
+                  aria-label="图例缩放"
+                />
+                <button id="zoomIn" type="button" title="放大图例" aria-label="放大图例">+</button>
+                <output id="zoomValue" for="cellSize">100%</output>
+              </div>
             </div>
             <div class="summary-strip" id="summaryStrip">
               <span>0 色</span>
@@ -167,6 +177,6 @@
       </main>
     </div>
 
-    <script src="./assets/app.js?v=recognition-3" defer></script>
+    <script src="./assets/app.js?v=outline-4" defer></script>
   </body>
 </html>
