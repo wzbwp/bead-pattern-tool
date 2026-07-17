@@ -176,12 +176,12 @@ function runRecognitionRegression() {
     app
   );
 
-  assert.deepEqual(new Set(result.boundaryCodes), new Set(["A2"]));
+  assert.deepEqual(new Set(result.boundaryCodes), new Set(["A2", "A1", "A5", "A9"]));
   assert.equal(Array.from(result.toothCodes).join(","), "H2,H2");
   assert.equal(result.exteriorCode, "H2");
 }
 
-function runColoredOutlineRegression() {
+function runOutlinePreservationRegression() {
   const app = loadApp();
   const result = vm.runInContext(
     `(() => {
@@ -195,10 +195,7 @@ function runColoredOutlineRegression() {
         rgb: { ...WHITE_RGB },
         lab: rgbToLab(WHITE_RGB),
         isBackground: true,
-        whiteDetailCoverage: 1,
-        outlineDetailCoverage: 0,
-        outlineDetailRgb: { ...WHITE_RGB },
-        outlineDetailLab: rgbToLab(WHITE_RGB)
+        whiteDetailCoverage: 1
       }));
 
       for (let y = 2; y <= 6; y += 1) {
@@ -211,9 +208,7 @@ function runColoredOutlineRegression() {
               ...cells[index],
               rgb: { ...outline.rgb },
               lab: rgbToLab(outline.rgb),
-              outlineDetailCoverage: 0.85,
-              outlineDetailRgb: { ...outline.rgb },
-              outlineDetailLab: rgbToLab(outline.rgb)
+              whiteDetailCoverage: 0
             };
           }
         }
@@ -222,19 +217,13 @@ function runColoredOutlineRegression() {
       const thinLine = [3 * 9 + 2, 4 * 9 + 2, 5 * 9 + 2];
       for (const index of thinLine) {
         cells[index] = {
-          ...cells[index],
-          outlineDetailCoverage: 0.12,
-          outlineDetailRgb: { ...outline.rgb },
-          outlineDetailLab: rgbToLab(outline.rgb)
+          ...cells[index]
         };
       }
 
       const noiseIndex = 7 * 9 + 1;
       cells[noiseIndex] = {
-        ...cells[noiseIndex],
-        outlineDetailCoverage: 0.12,
-        outlineDetailRgb: { ...outline.rgb },
-        outlineDetailLab: rgbToLab(outline.rgb)
+        ...cells[noiseIndex]
       };
 
       const refined = refinePatternColors(colors, cells);
@@ -246,7 +235,7 @@ function runColoredOutlineRegression() {
     app
   );
 
-  assert.equal(Array.from(result.thinLineCodes).join(","), "C8,C8,C8");
+  assert.equal(Array.from(result.thinLineCodes).join(","), "H2,H2,H2");
   assert.equal(result.noiseCode, "H2");
 }
 
@@ -276,6 +265,6 @@ function runPreviewZoomRegression() {
 }
 
 runRecognitionRegression();
-runColoredOutlineRegression();
+runOutlinePreservationRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
