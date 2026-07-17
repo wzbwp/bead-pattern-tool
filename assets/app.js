@@ -47,27 +47,26 @@ const WHITE_DETAIL_LUMINANCE = 0.9;
 const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
 const FOREGROUND_SAMPLE_DISTANCE = 28;
-const FOREGROUND_SAMPLE_COVERAGE = 0.075;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
   enhanced: {
     samplesPerAxis: 9,
-    detailBoost: 2.6,
-    colorBoost: 0.18,
-    preserveForeground: true
+    detailBoost: 0,
+    colorBoost: 0,
+    pixelFaithful: true
   },
   average: {
     samplesPerAxis: 7,
     detailBoost: 0,
     colorBoost: 0.06,
-    preserveForeground: false
+    pixelFaithful: false
   },
   center: {
     samplesPerAxis: 1,
     detailBoost: 0,
     colorBoost: 0,
-    preserveForeground: false
+    pixelFaithful: false
   }
 };
 
@@ -458,45 +457,32 @@ function sampleCellColor(
   gridY,
   settings
 ) {
-  const samples = [];
-  const samplesPerAxis = settings.samplesPerAxis;
+  const samples = collectCellSamples(
+    data,
+    sourceWidth,
+    sourceHeight,
+    cellWidth,
+    cellHeight,
+    gridX,
+    gridY,
+    settings
+  );
   let baseR = 0;
   let baseG = 0;
   let baseB = 0;
   let alphaTotal = 0;
   let whiteDetailSamples = 0;
 
-  for (let sy = 0; sy < samplesPerAxis; sy += 1) {
-    for (let sx = 0; sx < samplesPerAxis; sx += 1) {
-      const offsetX = samplesPerAxis === 1 ? 0.5 : (sx + 0.5) / samplesPerAxis;
-      const offsetY = samplesPerAxis === 1 ? 0.5 : (sy + 0.5) / samplesPerAxis;
-      const sampleX = getSourceCoordinate(
-        gridX,
-        offsetX,
-        cellWidth,
-        state.gridWidth,
-        state.mirrorX
-      );
-      const sampleY = getSourceCoordinate(
-        gridY,
-        offsetY,
-        cellHeight,
-        state.gridHeight,
-        state.mirrorY
-      );
-      const pixel = getPixel(data, sourceWidth, sourceHeight, sampleX, sampleY);
-
-      samples.push(pixel);
-      baseR += pixel.rgb.r;
-      baseG += pixel.rgb.g;
-      baseB += pixel.rgb.b;
-      alphaTotal += pixel.alpha;
-      if (
-        getRgbLuminance(pixel.rgb) >= WHITE_DETAIL_LUMINANCE &&
-        getRgbChroma(pixel.rgb) <= WHITE_DETAIL_CHROMA
-      ) {
-        whiteDetailSamples += 1;
-      }
+  for (const pixel of samples) {
+    baseR += pixel.rgb.r;
+    baseG += pixel.rgb.g;
+    baseB += pixel.rgb.b;
+    alphaTotal += pixel.alpha;
+    if (
+      getRgbLuminance(pixel.rgb) >= WHITE_DETAIL_LUMINANCE &&
+      getRgbChroma(pixel.rgb) <= WHITE_DETAIL_CHROMA
+    ) {
+      whiteDetailSamples += 1;
     }
   }
 
@@ -550,9 +536,8 @@ function sampleCellColor(
     : baseRgb;
 
   const foreground = getForegroundSample(samples);
-  if (settings.preserveForeground && foreground.coverage >= FOREGROUND_SAMPLE_COVERAGE) {
-    const foregroundBlend = clamp01(0.72 + foreground.coverage * 1.4);
-    rgb = blendRgb(rgb, foreground.rgb, foregroundBlend);
+  if (settings.pixelFaithful && foreground.count > 0) {
+    rgb = foreground.rgb;
   }
 
   const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
@@ -570,6 +555,62 @@ function sampleCellColor(
     isBackground,
     paletteWeight: isBackground ? 0.08 : 1 + Math.min(1.6, detailScore * 4)
   };
+}
+
+function collectCellSamples(
+  data,
+  sourceWidth,
+  sourceHeight,
+  cellWidth,
+  cellHeight,
+  gridX,
+  gridY,
+  settings
+) {
+  const samples = [];
+  if (settings.pixelFaithful) {
+    const sourceGridX = state.mirrorX ? state.gridWidth - 1 - gridX : gridX;
+    const sourceGridY = state.mirrorY ? state.gridHeight - 1 - gridY : gridY;
+    const startX = Math.max(0, Math.floor(sourceGridX * cellWidth));
+    const endX = Math.min(sourceWidth, Math.ceil((sourceGridX + 1) * cellWidth));
+    const startY = Math.max(0, Math.floor(sourceGridY * cellHeight));
+    const endY = Math.min(sourceHeight, Math.ceil((sourceGridY + 1) * cellHeight));
+
+    for (let y = startY; y < endY; y += 1) {
+      for (let x = startX; x < endX; x += 1) {
+        samples.push(getPixel(data, sourceWidth, sourceHeight, x, y));
+      }
+    }
+
+    return samples;
+  }
+
+  const samplesX = settings.samplesPerAxis;
+  const samplesY = settings.samplesPerAxis;
+
+  for (let sy = 0; sy < samplesY; sy += 1) {
+    for (let sx = 0; sx < samplesX; sx += 1) {
+      const offsetX = samplesX === 1 ? 0.5 : (sx + 0.5) / samplesX;
+      const offsetY = samplesY === 1 ? 0.5 : (sy + 0.5) / samplesY;
+      const sampleX = getSourceCoordinate(
+        gridX,
+        offsetX,
+        cellWidth,
+        state.gridWidth,
+        state.mirrorX
+      );
+      const sampleY = getSourceCoordinate(
+        gridY,
+        offsetY,
+        cellHeight,
+        state.gridHeight,
+        state.mirrorY
+      );
+      samples.push(getPixel(data, sourceWidth, sourceHeight, sampleX, sampleY));
+    }
+  }
+
+  return samples;
 }
 
 function getForegroundSample(samples) {
@@ -615,6 +656,7 @@ function getForegroundSample(samples) {
   }
 
   return {
+    count: best?.count || 0,
     coverage: samples.length && best ? best.count / samples.length : 0,
     rgb: best
       ? {
@@ -782,7 +824,11 @@ function restoreEnclosedWhiteDetails(colors, cells, exteriorBackground, width, h
 
     const x = index % width;
     const y = Math.floor(index / width);
-    const enclosedNeighbors = getNeighborIndices(x, y, width, height).filter(
+    const neighbors = getNeighborIndices(x, y, width, height);
+    if (neighbors.some((neighborIndex) => exteriorBackground[neighborIndex])) {
+      continue;
+    }
+    const enclosedNeighbors = neighbors.filter(
       (neighborIndex) => !exteriorBackground[neighborIndex]
     ).length;
     if (enclosedNeighbors >= 3) {
