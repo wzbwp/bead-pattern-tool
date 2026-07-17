@@ -239,14 +239,14 @@ function runOutlinePreservationRegression() {
   assert.equal(result.noiseCode, "H2");
 }
 
-function runThinForegroundSamplingRegression() {
+function runPixelFaithfulSamplingRegression() {
   const app = loadApp();
   const result = vm.runInContext(
     `(() => {
       state.gridWidth = 1;
       state.gridHeight = 1;
-      const width = 9;
-      const height = 9;
+      const width = 17;
+      const height = 17;
       const createPixels = () => new Uint8ClampedArray(width * height * 4).fill(255);
       const setBlack = (pixels, x, y) => {
         const index = (y * width + x) * 4;
@@ -258,10 +258,10 @@ function runThinForegroundSamplingRegression() {
 
       const linePixels = createPixels();
       for (let y = 0; y < height; y += 1) {
-        setBlack(linePixels, 4, y);
+        setBlack(linePixels, 1, y);
       }
       const noisePixels = createPixels();
-      setBlack(noisePixels, 4, 4);
+      setBlack(noisePixels, 1, 1);
 
       const line = sampleCellColor(
         linePixels,
@@ -289,8 +289,53 @@ function runThinForegroundSamplingRegression() {
   );
 
   assert.equal(result.line.isBackground, false);
-  assert.ok(result.line.rgb.r < 90);
-  assert.ok(result.noise.rgb.r > 210);
+  assert.equal(result.line.rgb.r, 15);
+  assert.equal(result.line.rgb.g, 16);
+  assert.equal(result.line.rgb.b, 15);
+  assert.equal(result.noise.rgb.r, 15);
+}
+
+function runSampledBoundaryPreservationRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      state.gridWidth = 7;
+      state.gridHeight = 7;
+      const white = cloneColor(KNOWN_COLOR_MATCHES[0].color);
+      const black = createColor("A1", "原图黑色", { r: 15, g: 16, b: 15 });
+      const colors = new Array(49).fill(null).map(() => cloneColor(white));
+      const cells = new Array(49).fill(null).map(() => ({
+        rgb: { ...WHITE_RGB },
+        lab: rgbToLab(WHITE_RGB),
+        isBackground: true,
+        whiteDetailCoverage: 1
+      }));
+
+      for (let y = 2; y <= 4; y += 1) {
+        for (let x = 2; x <= 4; x += 1) {
+          const index = y * 7 + x;
+          const boundary = x === 2 || x === 4 || y === 2 || y === 4;
+          if (boundary) {
+            colors[index] = cloneColor(black);
+            cells[index] = {
+              rgb: { ...black.rgb },
+              lab: rgbToLab(black.rgb),
+              isBackground: false,
+              whiteDetailCoverage: 0.88
+            };
+          }
+        }
+      }
+
+      const refined = refinePatternColors(colors, cells);
+      return [2 * 7 + 3, 3 * 7 + 2, 3 * 7 + 4, 4 * 7 + 3].map(
+        (index) => refined[index].code
+      );
+    })()`,
+    app
+  );
+
+  assert.equal(Array.from(result).join(","), "A1,A1,A1,A1");
 }
 
 function runPreviewZoomRegression() {
@@ -320,6 +365,7 @@ function runPreviewZoomRegression() {
 
 runRecognitionRegression();
 runOutlinePreservationRegression();
-runThinForegroundSamplingRegression();
+runPixelFaithfulSamplingRegression();
+runSampledBoundaryPreservationRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
