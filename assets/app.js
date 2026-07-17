@@ -52,23 +52,33 @@ const DEFAULT_COLOR_PACKAGE = 8;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
+  classic: {
+    samplesPerAxis: 9,
+    detailBoost: 2.6,
+    colorBoost: 0.18,
+    preserveLines: false,
+    classic: true
+  },
   enhanced: {
     samplesPerAxis: 9,
     detailBoost: 2.6,
     colorBoost: 0.18,
-    preserveLines: true
+    preserveLines: true,
+    classic: false
   },
   average: {
     samplesPerAxis: 7,
     detailBoost: 0,
     colorBoost: 0.06,
-    preserveLines: false
+    preserveLines: false,
+    classic: false
   },
   center: {
     samplesPerAxis: 1,
     detailBoost: 0,
     colorBoost: 0,
-    preserveLines: false
+    preserveLines: false,
+    classic: false
   }
 };
 
@@ -83,7 +93,7 @@ const state = {
   gridHeight: 80,
   cellSize: 18,
   colorPackage: DEFAULT_COLOR_PACKAGE,
-  sampleMode: "enhanced",
+  sampleMode: "classic",
   lockRatio: true,
   mirrorX: false,
   mirrorY: false,
@@ -353,7 +363,7 @@ function parseImage() {
 
   state.gridWidth = normalizeNumber(els.gridWidth.value, 8, 240, 80);
   state.gridHeight = normalizeNumber(els.gridHeight.value, 8, 240, 80);
-  state.sampleMode = SAMPLE_MODE_SETTINGS[els.sampleMode.value] ? els.sampleMode.value : "enhanced";
+  state.sampleMode = SAMPLE_MODE_SETTINGS[els.sampleMode.value] ? els.sampleMode.value : "classic";
   state.mirrorX = els.mirrorX.checked;
   state.mirrorY = els.mirrorY.checked;
 
@@ -361,11 +371,13 @@ function parseImage() {
 
   const sourceCells = sampleImageCells();
   const mapped = mapCellsToPattern(sourceCells);
-  const refinedColors = refinePatternColors(mapped.colors, sourceCells);
+  const outputColors = state.sampleMode === "classic"
+    ? mapped.colors
+    : refinePatternColors(mapped.colors, sourceCells);
 
   state.sourceCells = sourceCells;
-  state.pattern = toRows(refinedColors, state.gridWidth);
-  state.stats = buildStats(refinedColors);
+  state.pattern = toRows(outputColors, state.gridWidth);
+  state.stats = buildStats(outputColors);
   state.activePalette = mapped.palette;
   state.averageDelta = mapped.averageDelta;
 
@@ -401,7 +413,7 @@ function sampleImageCells() {
   const cells = [];
   const cellWidth = sourceWidth / state.gridWidth;
   const cellHeight = sourceHeight / state.gridHeight;
-  const sampleSettings = SAMPLE_MODE_SETTINGS[state.sampleMode] || SAMPLE_MODE_SETTINGS.enhanced;
+  const sampleSettings = SAMPLE_MODE_SETTINGS[state.sampleMode] || SAMPLE_MODE_SETTINGS.classic;
 
   for (let y = 0; y < state.gridHeight; y += 1) {
     for (let x = 0; x < state.gridWidth; x += 1) {
@@ -560,7 +572,11 @@ function sampleCellColor(
     whiteDetailCoverage,
     detailScore,
     isBackground,
-    paletteWeight: isBackground ? 0.08 : 1 + Math.min(1.6, detailScore * 4)
+    paletteWeight: isBackground
+      ? 0.08
+      : settings.classic
+        ? 1 + Math.min(2.8, detailScore * 7)
+        : 1 + Math.min(1.6, detailScore * 4)
   };
 }
 
