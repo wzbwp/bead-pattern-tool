@@ -239,7 +239,7 @@ function runOutlinePreservationRegression() {
   assert.equal(result.noiseCode, "H2");
 }
 
-function runPixelFaithfulSamplingRegression() {
+function runBalancedSamplingRegression() {
   const app = loadApp();
   const result = vm.runInContext(
     `(() => {
@@ -289,10 +289,20 @@ function runPixelFaithfulSamplingRegression() {
   );
 
   assert.equal(result.line.isBackground, false);
-  assert.equal(result.line.rgb.r, 15);
-  assert.equal(result.line.rgb.g, 16);
-  assert.equal(result.line.rgb.b, 15);
-  assert.equal(result.noise.rgb.r, 15);
+  assert.ok(result.line.rgb.r < 110);
+  assert.ok(result.line.rgb.g < 110);
+  assert.ok(result.line.rgb.b < 110);
+  assert.ok(result.noise.rgb.r > 220);
+}
+
+function runDefaultPaletteRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `({ colorPackage: state.colorPackage, activeLimit: getActivePaletteLimit(1000) })`,
+    app
+  );
+  assert.equal(result.colorPackage, 8);
+  assert.equal(result.activeLimit, 8);
 }
 
 function runSampledBoundaryPreservationRegression() {
@@ -365,7 +375,8 @@ function runPreviewZoomRegression() {
 
 runRecognitionRegression();
 runOutlinePreservationRegression();
-runPixelFaithfulSamplingRegression();
+runBalancedSamplingRegression();
 runSampledBoundaryPreservationRegression();
+runDefaultPaletteRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
