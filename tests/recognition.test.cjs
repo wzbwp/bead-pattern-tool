@@ -298,11 +298,95 @@ function runBalancedSamplingRegression() {
 function runDefaultPaletteRegression() {
   const app = loadApp();
   const result = vm.runInContext(
-    `({ colorPackage: state.colorPackage, activeLimit: getActivePaletteLimit(1000) })`,
+    `({
+      colorPackage: state.colorPackage,
+      activeLimit: getActivePaletteLimit(1000),
+      sampleMode: state.sampleMode,
+      classicWeight: SAMPLE_MODE_SETTINGS.classic.classic
+    })`,
     app
   );
   assert.equal(result.colorPackage, 8);
   assert.equal(result.activeLimit, 8);
+  assert.equal(result.sampleMode, "classic");
+  assert.equal(result.classicWeight, true);
+}
+
+function runClassicSamplingRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      state.gridWidth = 1;
+      state.gridHeight = 1;
+      const width = 9;
+      const height = 9;
+      const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+      const index = (4 * width + 4) * 4;
+      pixels[index] = 15;
+      pixels[index + 1] = 16;
+      pixels[index + 2] = 15;
+      const sampled = sampleCellColor(
+        pixels,
+        width,
+        height,
+        width,
+        height,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.classic
+      );
+      const samples = collectCellSamples(
+        pixels,
+        width,
+        height,
+        width,
+        height,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.classic
+      );
+      const baseRgb = {
+        r: Math.round(samples.reduce((sum, sample) => sum + sample.rgb.r, 0) / samples.length),
+        g: Math.round(samples.reduce((sum, sample) => sum + sample.rgb.g, 0) / samples.length),
+        b: Math.round(samples.reduce((sum, sample) => sum + sample.rgb.b, 0) / samples.length)
+      };
+      let weightedR = 0;
+      let weightedG = 0;
+      let weightedB = 0;
+      let totalWeight = 0;
+      let detailTotal = 0;
+      let maxSalience = 0;
+      for (const sample of samples) {
+        const salience = getPixelSalience(sample.rgb, baseRgb, sample.alpha);
+        const weight = Math.max(0.08, sample.alpha) * (1 + 2.6 * salience);
+        weightedR += sample.rgb.r * weight;
+        weightedG += sample.rgb.g * weight;
+        weightedB += sample.rgb.b * weight;
+        totalWeight += weight;
+        detailTotal += salience;
+        maxSalience = Math.max(maxSalience, salience);
+      }
+      const detailScore = Math.max(detailTotal / samples.length, maxSalience * 0.32);
+      const expectedRgb = boostPatternColor(
+        {
+          r: Math.round(weightedR / totalWeight),
+          g: Math.round(weightedG / totalWeight),
+          b: Math.round(weightedB / totalWeight)
+        },
+        0.18,
+        detailScore
+      );
+      return { sampled, expectedRgb, detailScore };
+    })()`,
+    app
+  );
+
+  assert.equal(JSON.stringify(result.sampled.rgb), JSON.stringify(result.expectedRgb));
+  assert.equal(result.sampled.isBackground, false);
+  assert.equal(
+    result.sampled.paletteWeight,
+    1 + Math.min(2.8, result.detailScore * 7)
+  );
 }
 
 function runSampledBoundaryPreservationRegression() {
@@ -378,5 +462,6 @@ runOutlinePreservationRegression();
 runBalancedSamplingRegression();
 runSampledBoundaryPreservationRegression();
 runDefaultPaletteRegression();
+runClassicSamplingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
