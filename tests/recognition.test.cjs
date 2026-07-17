@@ -239,6 +239,60 @@ function runOutlinePreservationRegression() {
   assert.equal(result.noiseCode, "H2");
 }
 
+function runThinForegroundSamplingRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      state.gridWidth = 1;
+      state.gridHeight = 1;
+      const width = 9;
+      const height = 9;
+      const createPixels = () => new Uint8ClampedArray(width * height * 4).fill(255);
+      const setBlack = (pixels, x, y) => {
+        const index = (y * width + x) * 4;
+        pixels[index] = 15;
+        pixels[index + 1] = 16;
+        pixels[index + 2] = 15;
+        pixels[index + 3] = 255;
+      };
+
+      const linePixels = createPixels();
+      for (let y = 0; y < height; y += 1) {
+        setBlack(linePixels, 4, y);
+      }
+      const noisePixels = createPixels();
+      setBlack(noisePixels, 4, 4);
+
+      const line = sampleCellColor(
+        linePixels,
+        width,
+        height,
+        width,
+        height,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.enhanced
+      );
+      const noise = sampleCellColor(
+        noisePixels,
+        width,
+        height,
+        width,
+        height,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.enhanced
+      );
+      return { line, noise };
+    })()`,
+    app
+  );
+
+  assert.equal(result.line.isBackground, false);
+  assert.ok(result.line.rgb.r < 90);
+  assert.ok(result.noise.rgb.r > 210);
+}
+
 function runPreviewZoomRegression() {
   const app = loadApp();
   const result = vm.runInContext(
@@ -266,5 +320,6 @@ function runPreviewZoomRegression() {
 
 runRecognitionRegression();
 runOutlinePreservationRegression();
+runThinForegroundSamplingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");

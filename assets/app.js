@@ -46,23 +46,28 @@ const AUTO_PALETTE_FINAL_DELTA = 6.8;
 const WHITE_DETAIL_LUMINANCE = 0.9;
 const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
+const FOREGROUND_SAMPLE_DISTANCE = 28;
+const FOREGROUND_SAMPLE_COVERAGE = 0.075;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
   enhanced: {
     samplesPerAxis: 9,
     detailBoost: 2.6,
-    colorBoost: 0.18
+    colorBoost: 0.18,
+    preserveForeground: true
   },
   average: {
     samplesPerAxis: 7,
     detailBoost: 0,
-    colorBoost: 0.06
+    colorBoost: 0.06,
+    preserveForeground: false
   },
   center: {
     samplesPerAxis: 1,
     detailBoost: 0,
-    colorBoost: 0
+    colorBoost: 0,
+    preserveForeground: false
   }
 };
 
@@ -544,6 +549,12 @@ function sampleCellColor(
       }
     : baseRgb;
 
+  const foreground = getForegroundSample(samples);
+  if (settings.preserveForeground && foreground.coverage >= FOREGROUND_SAMPLE_COVERAGE) {
+    const foregroundBlend = clamp01(0.72 + foreground.coverage * 1.4);
+    rgb = blendRgb(rgb, foreground.rgb, foregroundBlend);
+  }
+
   const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
   if (isBackground) {
     rgb = WHITE_RGB;
@@ -558,6 +569,60 @@ function sampleCellColor(
     detailScore,
     isBackground,
     paletteWeight: isBackground ? 0.08 : 1 + Math.min(1.6, detailScore * 4)
+  };
+}
+
+function getForegroundSample(samples) {
+  const clusters = new Map();
+
+  for (const sample of samples) {
+    const distance = getRgbDistance(sample.rgb, WHITE_RGB);
+    if (distance < FOREGROUND_SAMPLE_DISTANCE) {
+      continue;
+    }
+
+    const weight = Math.max(0.25, Math.min(2.4, distance / 90));
+    const key = `${Math.round(sample.rgb.r / 32)}:${Math.round(sample.rgb.g / 32)}:${Math.round(
+      sample.rgb.b / 32
+    )}`;
+    const cluster = clusters.get(key);
+    if (cluster) {
+      cluster.count += 1;
+      cluster.weight += weight;
+      cluster.red += sample.rgb.r * weight;
+      cluster.green += sample.rgb.g * weight;
+      cluster.blue += sample.rgb.b * weight;
+    } else {
+      clusters.set(key, {
+        count: 1,
+        weight,
+        red: sample.rgb.r * weight,
+        green: sample.rgb.g * weight,
+        blue: sample.rgb.b * weight
+      });
+    }
+  }
+
+  let best = null;
+  for (const cluster of clusters.values()) {
+    if (
+      !best ||
+      cluster.count > best.count ||
+      (cluster.count === best.count && cluster.weight > best.weight)
+    ) {
+      best = cluster;
+    }
+  }
+
+  return {
+    coverage: samples.length && best ? best.count / samples.length : 0,
+    rgb: best
+      ? {
+          r: Math.round(best.red / best.weight),
+          g: Math.round(best.green / best.weight),
+          b: Math.round(best.blue / best.weight)
+        }
+      : WHITE_RGB
   };
 }
 
