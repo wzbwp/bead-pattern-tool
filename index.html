@@ -8,7 +8,7 @@
       content="纯前端拼豆图纸解析工具，上传图片后解析为拼豆色号和小色块图纸。"
     />
     <title>拼豆图纸解析工具</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=restore-1" />
+    <link rel="stylesheet" href="./assets/styles.css?v=panel-2" />
   </head>
   <body>
     <div class="app-shell">
@@ -33,10 +33,31 @@
             <div class="source-preview" id="sourcePreview">
               <span>未选择图片</span>
             </div>
+            <label class="field">
+              <span>图片缩放</span>
+              <input id="imageScale" type="range" min="50" max="300" value="100" />
+            </label>
+            <label class="field">
+              <span>左右移动</span>
+              <input id="imageOffsetX" type="range" min="-100" max="100" value="0" />
+            </label>
+            <label class="field">
+              <span>上下移动</span>
+              <input id="imageOffsetY" type="range" min="-100" max="100" value="0" />
+            </label>
           </section>
 
           <section class="panel-section">
             <div class="section-title">图纸</div>
+            <div class="config-group first-group">
+              <div class="section-title compact">面板尺寸</div>
+              <div class="panel-presets" id="panelPresets">
+                <button class="panel-preset" type="button" data-size="52">52 x 52</button>
+                <button class="panel-preset" type="button" data-size="78">78 x 78</button>
+                <button class="panel-preset" type="button" data-size="104">104 x 104</button>
+              </div>
+              <div class="board-meta" id="boardMeta">当前：80 x 80 颗</div>
+            </div>
             <label class="field">
               <span>宽度颗数</span>
               <input id="gridWidth" type="number" min="8" max="240" value="80" />
@@ -146,6 +167,6 @@
       </main>
     </div>
 
-    <script src="./assets/app.js?v=restore-1" defer></script>
+    <script src="./assets/app.js?v=panel-2" defer></script>
   </body>
 </html>
