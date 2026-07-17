@@ -46,27 +46,29 @@ const AUTO_PALETTE_FINAL_DELTA = 6.8;
 const WHITE_DETAIL_LUMINANCE = 0.9;
 const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
-const FOREGROUND_SAMPLE_DISTANCE = 28;
+const FOREGROUND_SAMPLE_DISTANCE = 34;
+const FOREGROUND_MIN_COVERAGE = 0.035;
+const DEFAULT_COLOR_PACKAGE = 8;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
   enhanced: {
     samplesPerAxis: 9,
-    detailBoost: 0,
-    colorBoost: 0,
-    pixelFaithful: true
+    detailBoost: 2.6,
+    colorBoost: 0.18,
+    preserveLines: true
   },
   average: {
     samplesPerAxis: 7,
     detailBoost: 0,
     colorBoost: 0.06,
-    pixelFaithful: false
+    preserveLines: false
   },
   center: {
     samplesPerAxis: 1,
     detailBoost: 0,
     colorBoost: 0,
-    pixelFaithful: false
+    preserveLines: false
   }
 };
 
@@ -80,7 +82,7 @@ const state = {
   gridWidth: 80,
   gridHeight: 80,
   cellSize: 18,
-  colorPackage: BEAD_COLOR_CODES.length,
+  colorPackage: DEFAULT_COLOR_PACKAGE,
   sampleMode: "enhanced",
   lockRatio: true,
   mirrorX: false,
@@ -536,8 +538,13 @@ function sampleCellColor(
     : baseRgb;
 
   const foreground = getForegroundSample(samples);
-  if (settings.pixelFaithful && foreground.count > 0) {
-    rgb = foreground.rgb;
+  if (
+    settings.preserveLines &&
+    foreground.isLine &&
+    foreground.coverage >= FOREGROUND_MIN_COVERAGE
+  ) {
+    const blend = clamp01(0.55 + foreground.coverage * 1.8);
+    rgb = blendRgb(rgb, foreground.rgb, blend);
   }
 
   const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
@@ -568,7 +575,7 @@ function collectCellSamples(
   settings
 ) {
   const samples = [];
-  if (settings.pixelFaithful) {
+  if (settings.preserveLines) {
     const sourceGridX = state.mirrorX ? state.gridWidth - 1 - gridX : gridX;
     const sourceGridY = state.mirrorY ? state.gridHeight - 1 - gridY : gridY;
     const startX = Math.max(0, Math.floor(sourceGridX * cellWidth));
@@ -578,7 +585,7 @@ function collectCellSamples(
 
     for (let y = startY; y < endY; y += 1) {
       for (let x = startX; x < endX; x += 1) {
-        samples.push(getPixel(data, sourceWidth, sourceHeight, x, y));
+        samples.push({ ...getPixel(data, sourceWidth, sourceHeight, x, y), x, y });
       }
     }
 
@@ -633,13 +640,15 @@ function getForegroundSample(samples) {
       cluster.red += sample.rgb.r * weight;
       cluster.green += sample.rgb.g * weight;
       cluster.blue += sample.rgb.b * weight;
+      cluster.points.push(sample);
     } else {
       clusters.set(key, {
         count: 1,
         weight,
         red: sample.rgb.r * weight,
         green: sample.rgb.g * weight,
-        blue: sample.rgb.b * weight
+        blue: sample.rgb.b * weight,
+        points: [sample]
       });
     }
   }
@@ -658,6 +667,7 @@ function getForegroundSample(samples) {
   return {
     count: best?.count || 0,
     coverage: samples.length && best ? best.count / samples.length : 0,
+    isLine: best ? isContinuousSampleLine(best.points) : false,
     rgb: best
       ? {
           r: Math.round(best.red / best.weight),
@@ -666,6 +676,27 @@ function getForegroundSample(samples) {
         }
       : WHITE_RGB
   };
+}
+
+function isContinuousSampleLine(points) {
+  if (points.length < 2) {
+    return false;
+  }
+
+  const keys = new Set(points.map((point) => `${point.x}:${point.y}`));
+  for (const point of points) {
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) {
+          continue;
+        }
+        if (keys.has(`${point.x + offsetX}:${point.y + offsetY}`)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function getSourceCoordinate(gridIndex, offset, cellSize, gridSize, mirrored) {
