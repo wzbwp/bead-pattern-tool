@@ -300,16 +300,56 @@ function runDefaultPaletteRegression() {
   const result = vm.runInContext(
     `({
       colorPackage: state.colorPackage,
-      activeLimit: getActivePaletteLimit(1000),
       sampleMode: state.sampleMode,
       classicWeight: SAMPLE_MODE_SETTINGS.classic.classic
     })`,
     app
   );
-  assert.equal(result.colorPackage, 8);
-  assert.equal(result.activeLimit, 8);
+  assert.equal(result.colorPackage, 0);
   assert.equal(result.sampleMode, "classic");
   assert.equal(result.classicWeight, true);
+}
+
+function runAdaptivePaletteRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      const makeCells = (count) => Array.from({ length: count }, (_, index) => {
+        const hue = index / count;
+        const rgb = hslToRgb({ h: hue, s: 0.72, l: 0.28 + (index % 4) * 0.14 });
+        return {
+          rgb,
+          hex: rgbToHex(rgb),
+          lab: rgbToLab(rgb),
+          paletteWeight: 1,
+          isBackground: false
+        };
+      });
+      const simple = [
+        { r: 255, g: 255, b: 255 },
+        { r: 20, g: 20, b: 20 },
+        { r: 130, g: 185, b: 65 },
+        { r: 238, g: 175, b: 165 }
+      ].flatMap((rgb) => Array.from({ length: 20 }, () => ({
+        rgb,
+        hex: rgbToHex(rgb),
+        lab: rgbToLab(rgb),
+        paletteWeight: 1,
+        isBackground: isNearWhite(rgb, 12)
+      })));
+      const detailed = makeCells(90);
+      const autoSimple = getActivePaletteLimit(simple);
+      const autoDetailed = getActivePaletteLimit(detailed);
+      state.colorPackage = 8;
+      const manualDetailed = getActivePaletteLimit(detailed);
+      return { autoSimple, autoDetailed, manualDetailed };
+    })()`,
+    app
+  );
+
+  assert.equal(result.autoSimple, 8);
+  assert.ok(result.autoDetailed >= 48);
+  assert.equal(result.manualDetailed, 8);
 }
 
 function runClassicSamplingRegression() {
@@ -462,6 +502,7 @@ runOutlinePreservationRegression();
 runBalancedSamplingRegression();
 runSampledBoundaryPreservationRegression();
 runDefaultPaletteRegression();
+runAdaptivePaletteRegression();
 runClassicSamplingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");

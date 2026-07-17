@@ -15,6 +15,7 @@ const BEAD_COLOR_CODES = Object.entries(COLOR_SERIES_COUNTS).flatMap(([series, c
 );
 
 const COLOR_PACKAGES = [
+  { size: 0, label: "自动匹配颜色", outputLimit: 72 },
   {
     size: BEAD_COLOR_CODES.length,
     label: `A-M 全色号 (最多 ${BEAD_COLOR_CODES.length})`,
@@ -48,7 +49,7 @@ const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
 const FOREGROUND_SAMPLE_DISTANCE = 34;
 const FOREGROUND_MIN_COVERAGE = 0.035;
-const DEFAULT_COLOR_PACKAGE = 8;
+const DEFAULT_COLOR_PACKAGE = 0;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
@@ -102,6 +103,7 @@ const state = {
   imageOffsetY: 0,
   showGrid: true,
   showCodes: false,
+  activeColorLimit: 8,
   averageDelta: 0
 };
 
@@ -788,7 +790,8 @@ function getRgbLuminance(rgb) {
 }
 
 function mapCellsToPattern(cells) {
-  const targetSize = getActivePaletteLimit(cells.length);
+  const targetSize = getActivePaletteLimit(cells);
+  state.activeColorLimit = targetSize;
   const palette = assignBeadColorCodes(
     ensureMandatoryColors(buildAutoPalette(cells, targetSize), cells, targetSize)
   );
@@ -1309,7 +1312,7 @@ function drawPattern() {
   els.resultTitle.textContent = `${state.imageName || "未命名图片"} · ${state.gridWidth} x ${state.gridHeight}`;
   els.summaryStrip.innerHTML = `<span>${state.stats.length} 色</span><span>${
     state.gridWidth * state.gridHeight
-  } 颗</span><span>${state.gridWidth} x ${state.gridHeight}</span><span>上限 ${state.colorPackage} 色</span><span>ΔE ${state.averageDelta.toFixed(1)}</span>`;
+  } 颗</span><span>${state.gridWidth} x ${state.gridHeight}</span><span>${getColorLimitLabel()}</span><span>ΔE ${state.averageDelta.toFixed(1)}</span>`;
   updateBoardMeta();
 }
 
@@ -1437,7 +1440,7 @@ function getEmptyCanvasSize() {
 function renderStats() {
   els.paletteList.innerHTML = "";
   const totalCount = state.gridWidth * state.gridHeight;
-  els.paletteMeta.textContent = `${state.stats.length} 个颜色 · 上限 ${state.colorPackage} 色 · 总计 ${totalCount} 颗 · 平均色差 ΔE ${state.averageDelta.toFixed(1)}`;
+  els.paletteMeta.textContent = `${state.stats.length} 个颜色 · ${getColorLimitLabel()} · 总计 ${totalCount} 颗 · 平均色差 ΔE ${state.averageDelta.toFixed(1)}`;
 
   const fragment = document.createDocumentFragment();
   state.stats.forEach((item) => {
@@ -1585,7 +1588,7 @@ function drawLegendForExport(exportCtx, options) {
   exportCtx.textAlign = "left";
   exportCtx.textBaseline = "middle";
   exportCtx.fillText(
-    `所需颜色：${state.stats.length} 种 / 总计 ${totalCount} 颗 / 上限 ${state.colorPackage} 色`,
+    `所需颜色：${state.stats.length} 种 / 总计 ${totalCount} 颗 / ${getColorLimitLabel()}`,
     padding,
     top + 32
   );
@@ -1637,6 +1640,7 @@ function exportJson() {
     source: state.imageName,
     scheme: "default",
     colorPackage: state.colorPackage,
+    activeColorLimit: state.activeColorLimit,
     sampleMode: state.sampleMode,
     mirror: {
       horizontal: state.mirrorX,
@@ -1987,10 +1991,40 @@ function selectColorPackage(size) {
   });
 }
 
-function getActivePaletteLimit(cellCount) {
+function getActivePaletteLimit(cells) {
   const currentPackage =
     COLOR_PACKAGES.find((item) => item.size === state.colorPackage) || COLOR_PACKAGES[0];
+  const cellCount = Array.isArray(cells) ? cells.length : Number(cells) || 1;
+  if (currentPackage.size === 0 && Array.isArray(cells)) {
+    return Math.min(cellCount, getAdaptiveColorLimit(cells));
+  }
   return Math.max(1, Math.min(currentPackage.outputLimit, cellCount));
+}
+
+function getAdaptiveColorLimit(cells) {
+  const rawPoints = buildWeightedPoints(cells);
+  const points = mergeWeightedPoints(
+    compactWeightedPoints(rawPoints, AUTO_PALETTE_POINT_DELTA * 0.75),
+    AUTO_PALETTE_POINT_DELTA
+  );
+  const estimatedCount = mergeWeightedPoints(points, AUTO_PALETTE_ESTIMATE_DELTA).length;
+
+  if (estimatedCount <= 22) {
+    return 8;
+  }
+  if (estimatedCount <= 34) {
+    return 24;
+  }
+  if (estimatedCount <= 54) {
+    return 48;
+  }
+  return 72;
+}
+
+function getColorLimitLabel() {
+  return state.colorPackage === 0
+    ? `自动上限 ${state.activeColorLimit} 色`
+    : `上限 ${state.colorPackage} 色`;
 }
 
 function normalizeNumber(value, min, max, fallback) {
