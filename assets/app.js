@@ -48,6 +48,10 @@ const OUTLINE_MAX_SOURCE_DELTA = 20;
 const WHITE_DETAIL_LUMINANCE = 0.9;
 const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
+const OUTLINE_DETAIL_BACKGROUND_DISTANCE = 26;
+const OUTLINE_DETAIL_MIN_COVERAGE = 0.075;
+const OUTLINE_DETAIL_STRONG_COVERAGE = 0.2;
+const OUTLINE_DETAIL_MAX_DELTA = 26;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
 const SAMPLE_MODE_SETTINGS = {
@@ -111,6 +115,9 @@ const els = {
   requiredTitle: document.querySelector("#requiredTitle"),
   requiredList: document.querySelector("#requiredList"),
   cellSize: document.querySelector("#cellSize"),
+  zoomOut: document.querySelector("#zoomOut"),
+  zoomIn: document.querySelector("#zoomIn"),
+  zoomValue: document.querySelector("#zoomValue"),
   showGrid: document.querySelector("#showGrid"),
   showCodes: document.querySelector("#showCodes"),
   patternCanvas: document.querySelector("#patternCanvas"),
@@ -132,6 +139,7 @@ renderPackageOptions();
 bindEvents();
 drawEmptyCanvas();
 updateBoardMeta();
+setPreviewZoom(state.cellSize);
 
 function renderPackageOptions() {
   els.packageOptions.innerHTML = COLOR_PACKAGES.map(
@@ -258,11 +266,11 @@ function bindEvents() {
   });
 
   els.cellSize.addEventListener("input", () => {
-    state.cellSize = normalizeNumber(els.cellSize.value, 10, 30, 18);
-    if (state.pattern.length) {
-      drawPattern();
-    }
+    setPreviewZoom(els.cellSize.value);
   });
+
+  els.zoomOut.addEventListener("click", () => setPreviewZoom(state.cellSize - 1));
+  els.zoomIn.addEventListener("click", () => setPreviewZoom(state.cellSize + 1));
 
   els.showGrid.addEventListener("change", () => {
     state.showGrid = els.showGrid.checked;
@@ -415,6 +423,9 @@ function sampleImageCells() {
         lab: rgbToLab(rgb),
         alphaCoverage: cell.alphaCoverage,
         whiteDetailCoverage: cell.whiteDetailCoverage,
+        outlineDetailCoverage: cell.outlineDetailCoverage,
+        outlineDetailRgb: cell.outlineDetailRgb,
+        outlineDetailLab: rgbToLab(cell.outlineDetailRgb),
         detailScore: cell.detailScore,
         isBackground: cell.isBackground,
         paletteWeight: cell.paletteWeight
@@ -501,12 +512,15 @@ function sampleCellColor(
   };
   const alphaCoverage = alphaTotal / sampleCount;
   const whiteDetailCoverage = whiteDetailSamples / sampleCount;
+  const outlineDetail = getOutlineDetailSample(samples, baseRgb);
 
   if (alphaCoverage < 0.025 && isNearWhite(baseRgb, 18)) {
     return {
       rgb: WHITE_RGB,
       alphaCoverage,
       whiteDetailCoverage,
+      outlineDetailCoverage: outlineDetail.coverage,
+      outlineDetailRgb: outlineDetail.rgb,
       detailScore: 0,
       isBackground: true,
       paletteWeight: 0.04
@@ -553,9 +567,44 @@ function sampleCellColor(
     rgb,
     alphaCoverage,
     whiteDetailCoverage,
+    outlineDetailCoverage: outlineDetail.coverage,
+    outlineDetailRgb: outlineDetail.rgb,
     detailScore,
     isBackground,
     paletteWeight: isBackground ? 0.08 : 1 + Math.min(1.6, detailScore * 4)
+  };
+}
+
+function getOutlineDetailSample(samples, fallbackRgb) {
+  let count = 0;
+  let totalWeight = 0;
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  for (const sample of samples) {
+    const backgroundDistance = getRgbDistance(sample.rgb, WHITE_RGB);
+    if (backgroundDistance < OUTLINE_DETAIL_BACKGROUND_DISTANCE) {
+      continue;
+    }
+
+    const weight = Math.max(0.18, Math.min(1.6, backgroundDistance / 120));
+    count += 1;
+    totalWeight += weight;
+    red += sample.rgb.r * weight;
+    green += sample.rgb.g * weight;
+    blue += sample.rgb.b * weight;
+  }
+
+  return {
+    coverage: samples.length ? count / samples.length : 0,
+    rgb: totalWeight
+      ? {
+          r: Math.round(red / totalWeight),
+          g: Math.round(green / totalWeight),
+          b: Math.round(blue / totalWeight)
+        }
+      : fallbackRgb
   };
 }
 
@@ -656,6 +705,7 @@ function refinePatternColors(colors, cells) {
   const refined = colors.map((color) => cloneColor(color));
   const width = state.gridWidth;
   const height = state.gridHeight;
+  restoreSampledOutlineDetails(refined, cells, width, height);
   const exteriorBackground = getExteriorBackgroundMask(refined, cells, width, height);
 
   restoreEnclosedWhiteDetails(refined, cells, exteriorBackground, width, height);
@@ -720,6 +770,134 @@ function refinePatternColors(colors, cells) {
   }
 
   return refined;
+}
+
+function restoreSampledOutlineDetails(colors, cells, width, height) {
+  const exteriorBackground = getExteriorBackgroundMask(colors, cells, width, height);
+  const outlineColor = detectSampledOutlineColor(
+    colors,
+    cells,
+    exteriorBackground,
+    width,
+    height
+  );
+  if (!outlineColor) {
+    return;
+  }
+
+  const candidates = cells.map((cell) => isSampledOutlineCell(cell, outlineColor));
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    let changed = false;
+
+    for (let index = 0; index < colors.length; index += 1) {
+      if (!candidates[index] || isSameColor(colors[index], outlineColor)) {
+        continue;
+      }
+
+      const x = index % width;
+      const y = Math.floor(index / width);
+      const connected = getNeighborIndices8(x, y, width, height).filter(
+        (neighborIndex) =>
+          candidates[neighborIndex] &&
+          (isSameColor(colors[neighborIndex], outlineColor) ||
+            getOutlineDetailCoverage(cells[neighborIndex]) >=
+              OUTLINE_DETAIL_STRONG_COVERAGE)
+      ).length;
+      const hasLineDirection = hasOppositeCandidate(candidates, x, y, width, height);
+      const strongSample =
+        getOutlineDetailCoverage(cells[index]) >= OUTLINE_DETAIL_STRONG_COVERAGE;
+
+      if ((strongSample && connected >= 1) || connected >= 2 || hasLineDirection) {
+        colors[index] = cloneColor(outlineColor);
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+}
+
+function detectSampledOutlineColor(colors, cells, exteriorBackground, width, height) {
+  const counts = new Map();
+
+  for (let index = 0; index < cells.length; index += 1) {
+    const cell = cells[index];
+    const detailCoverage = getOutlineDetailCoverage(cell);
+    if (
+      exteriorBackground[index] ||
+      detailCoverage < OUTLINE_DETAIL_STRONG_COVERAGE ||
+      !cell.outlineDetailLab
+    ) {
+      continue;
+    }
+
+    const x = index % width;
+    const y = Math.floor(index / width);
+    const exteriorNeighbors = getNeighborIndices8(x, y, width, height).filter(
+      (neighborIndex) => exteriorBackground[neighborIndex]
+    ).length;
+    if (exteriorNeighbors === 0) {
+      continue;
+    }
+
+    const color = colors[index];
+    if (!color || color.code === KNOWN_COLOR_MATCHES[0].color.code) {
+      continue;
+    }
+
+    const detailDelta = Math.sqrt(labDistanceSquared(cell.outlineDetailLab, color.lab));
+    if (detailDelta > OUTLINE_DETAIL_MAX_DELTA * 1.6) {
+      continue;
+    }
+
+    const key = color.code || color.hex;
+    const weight = detailCoverage * (1 + exteriorNeighbors * 0.35);
+    const existing = counts.get(key);
+    if (existing) {
+      existing.weight += weight;
+    } else {
+      counts.set(key, { color, weight });
+    }
+  }
+
+  let best = null;
+  for (const entry of counts.values()) {
+    if (!best || entry.weight > best.weight) {
+      best = entry;
+    }
+  }
+
+  return best?.weight >= 0.5 ? cloneColor(best.color) : null;
+}
+
+function isSampledOutlineCell(cell, outlineColor) {
+  if (
+    !cell ||
+    getOutlineDetailCoverage(cell) < OUTLINE_DETAIL_MIN_COVERAGE ||
+    !cell.outlineDetailLab
+  ) {
+    return false;
+  }
+
+  const detailDelta = Math.sqrt(labDistanceSquared(cell.outlineDetailLab, outlineColor.lab));
+  return detailDelta <= OUTLINE_DETAIL_MAX_DELTA;
+}
+
+function getOutlineDetailCoverage(cell) {
+  return Number.isFinite(cell?.outlineDetailCoverage) ? cell.outlineDetailCoverage : 0;
+}
+
+function hasOppositeCandidate(candidates, x, y, width, height) {
+  const has = (nx, ny) =>
+    nx >= 0 && nx < width && ny >= 0 && ny < height && candidates[ny * width + nx];
+  return (
+    (has(x - 1, y) && has(x + 1, y)) ||
+    (has(x, y - 1) && has(x, y + 1)) ||
+    (has(x - 1, y - 1) && has(x + 1, y + 1)) ||
+    (has(x + 1, y - 1) && has(x - 1, y + 1))
+  );
 }
 
 function getExteriorBackgroundMask(colors, cells, width, height) {
@@ -950,6 +1128,23 @@ function getNeighborIndices(x, y, width, height) {
     }
   }
 
+  return indices;
+}
+
+function getNeighborIndices8(x, y, width, height) {
+  const indices = [];
+  for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      if (offsetX === 0 && offsetY === 0) {
+        continue;
+      }
+      const nx = x + offsetX;
+      const ny = y + offsetY;
+      if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+        indices.push(ny * width + nx);
+      }
+    }
+  }
   return indices;
 }
 
@@ -2026,6 +2221,17 @@ function updateBoardMeta() {
   for (const button of els.panelPresets.querySelectorAll("[data-size]")) {
     const size = Number(button.dataset.size);
     button.classList.toggle("active", state.gridWidth === size && state.gridHeight === size);
+  }
+}
+
+function setPreviewZoom(value) {
+  state.cellSize = normalizeNumber(value, 6, 30, 18);
+  els.cellSize.value = String(state.cellSize);
+  els.zoomValue.textContent = `${Math.round((state.cellSize / 18) * 100)}%`;
+  els.zoomOut.disabled = state.cellSize <= 6;
+  els.zoomIn.disabled = state.cellSize >= 30;
+  if (state.pattern.length) {
+    drawPattern();
   }
 }
 

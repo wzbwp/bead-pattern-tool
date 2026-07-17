@@ -100,6 +100,49 @@ h2 {
   color: var(--accent-strong);
 }
 
+.preview-zoom {
+  display: grid;
+  grid-template-columns: auto 30px minmax(110px, 180px) 30px 48px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.preview-zoom button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.preview-zoom button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.preview-zoom button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.preview-zoom input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.preview-zoom output {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
@@ -641,6 +684,15 @@ h2 {
   .result-toolbar,
   .palette-header {
     padding: 14px;
+  }
+
+  .preview-zoom {
+    grid-template-columns: 30px minmax(90px, 1fr) 30px 46px;
+    width: 100%;
+  }
+
+  .preview-zoom > span {
+    grid-column: 1 / -1;
   }
 
   .field {

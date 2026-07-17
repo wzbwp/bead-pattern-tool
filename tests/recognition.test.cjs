@@ -4,8 +4,17 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 function createElement(overrides = {}) {
+  const listeners = new Map();
   return {
-    addEventListener() {},
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    click() {
+      listeners.get("click")?.({ target: this });
+    },
+    dispatch(type) {
+      listeners.get(type)?.({ target: this });
+    },
     appendChild() {},
     classList: { add() {}, remove() {}, toggle() {} },
     querySelector() {
@@ -172,5 +181,101 @@ function runRecognitionRegression() {
   assert.equal(result.exteriorCode, "H2");
 }
 
+function runColoredOutlineRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      state.gridWidth = 9;
+      state.gridHeight = 9;
+
+      const white = cloneColor(KNOWN_COLOR_MATCHES[0].color);
+      const outline = createColor("C8", "原图黄色边框", { r: 244, g: 194, b: 54 });
+      const colors = new Array(81).fill(null).map(() => cloneColor(white));
+      const cells = new Array(81).fill(null).map(() => ({
+        rgb: { ...WHITE_RGB },
+        lab: rgbToLab(WHITE_RGB),
+        isBackground: true,
+        whiteDetailCoverage: 1,
+        outlineDetailCoverage: 0,
+        outlineDetailRgb: { ...WHITE_RGB },
+        outlineDetailLab: rgbToLab(WHITE_RGB)
+      }));
+
+      for (let y = 2; y <= 6; y += 1) {
+        for (let x = 3; x <= 6; x += 1) {
+          const index = y * 9 + x;
+          cells[index].isBackground = false;
+          if (x === 3 || x === 6 || y === 2 || y === 6) {
+            colors[index] = cloneColor(outline);
+            cells[index] = {
+              ...cells[index],
+              rgb: { ...outline.rgb },
+              lab: rgbToLab(outline.rgb),
+              outlineDetailCoverage: 0.85,
+              outlineDetailRgb: { ...outline.rgb },
+              outlineDetailLab: rgbToLab(outline.rgb)
+            };
+          }
+        }
+      }
+
+      const thinLine = [3 * 9 + 2, 4 * 9 + 2, 5 * 9 + 2];
+      for (const index of thinLine) {
+        cells[index] = {
+          ...cells[index],
+          outlineDetailCoverage: 0.12,
+          outlineDetailRgb: { ...outline.rgb },
+          outlineDetailLab: rgbToLab(outline.rgb)
+        };
+      }
+
+      const noiseIndex = 7 * 9 + 1;
+      cells[noiseIndex] = {
+        ...cells[noiseIndex],
+        outlineDetailCoverage: 0.12,
+        outlineDetailRgb: { ...outline.rgb },
+        outlineDetailLab: rgbToLab(outline.rgb)
+      };
+
+      const refined = refinePatternColors(colors, cells);
+      return {
+        thinLineCodes: thinLine.map((index) => refined[index].code),
+        noiseCode: refined[noiseIndex].code
+      };
+    })()`,
+    app
+  );
+
+  assert.equal(Array.from(result.thinLineCodes).join(","), "C8,C8,C8");
+  assert.equal(result.noiseCode, "H2");
+}
+
+function runPreviewZoomRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      const initial = { size: state.cellSize, label: els.zoomValue.textContent };
+      els.zoomIn.click();
+      const enlarged = { size: state.cellSize, label: els.zoomValue.textContent };
+      els.zoomOut.click();
+      return {
+        initial,
+        enlarged,
+        restored: { size: state.cellSize, label: els.zoomValue.textContent }
+      };
+    })()`,
+    app
+  );
+
+  assert.equal(result.initial.size, 18);
+  assert.equal(result.initial.label, "100%");
+  assert.equal(result.enlarged.size, 19);
+  assert.equal(result.enlarged.label, "106%");
+  assert.equal(result.restored.size, 18);
+  assert.equal(result.restored.label, "100%");
+}
+
 runRecognitionRegression();
+runColoredOutlineRegression();
+runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
