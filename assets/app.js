@@ -70,6 +70,9 @@ const SOFT_COLOR_MIN_COVERAGE = 0.04;
 const STROKE_MAX_CHROMA = 0.16;
 const STROKE_MAX_LUMINANCE = 0.38;
 const STROKE_MIN_COVERAGE = 0.02;
+const EDGE_STROKE_MAX_CHROMA = 0.14;
+const EDGE_STROKE_MAX_LUMINANCE = 0.9;
+const EDGE_STROKE_MIN_DISTANCE = 28;
 const DEFAULT_COLOR_PACKAGE = 0;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
@@ -459,9 +462,13 @@ function sampleImageCells() {
         alphaCoverage: cell.alphaCoverage,
         whiteDetailCoverage: cell.whiteDetailCoverage,
         softColorCoverage: cell.softColorCoverage,
+        softColorEvidence: cell.softColorEvidence,
         strokeCoverage: cell.strokeCoverage,
         strokeRgb: cell.strokeRgb,
         strokeEvidence: cell.strokeEvidence,
+        edgeStrokeCoverage: cell.edgeStrokeCoverage,
+        edgeStrokeRgb: cell.edgeStrokeRgb,
+        edgeStrokeEvidence: cell.edgeStrokeEvidence,
         detailScore: cell.detailScore,
         isBackground: cell.isBackground,
         paletteWeight: cell.paletteWeight
@@ -537,6 +544,9 @@ function sampleCellColor(
   const whiteDetailCoverage = whiteDetailSamples / sampleCount;
   const softColor = getSoftColorSample(samples);
   const stroke = getNeutralStrokeSample(samples);
+  const hasSoftColor =
+    softColor.coverage >= SOFT_COLOR_MIN_COVERAGE &&
+    softColor.chroma >= SOFT_COLOR_MIN_CHROMA;
 
   if (alphaCoverage < 0.025 && isNearWhite(baseRgb, 18)) {
     return {
@@ -544,9 +554,13 @@ function sampleCellColor(
       alphaCoverage,
       whiteDetailCoverage,
       softColorCoverage: softColor.coverage,
+      softColorEvidence: hasSoftColor,
       strokeCoverage: stroke.coverage,
       strokeRgb: stroke.rgb,
       strokeEvidence: false,
+      edgeStrokeCoverage: stroke.edgeCoverage,
+      edgeStrokeRgb: stroke.edgeRgb,
+      edgeStrokeEvidence: false,
       detailScore: 0,
       isBackground: true,
       paletteWeight: 0.04
@@ -601,7 +615,7 @@ function sampleCellColor(
     rgb = blendRgb(rgb, softColor.rgb, accentBlend);
   }
 
-  const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
+  const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055 && !hasSoftColor;
   if (isBackground) {
     rgb = WHITE_RGB;
   } else if (settings.colorBoost > 0) {
@@ -613,18 +627,24 @@ function sampleCellColor(
     alphaCoverage,
     whiteDetailCoverage,
     softColorCoverage: softColor.coverage,
+    softColorEvidence: hasSoftColor,
     strokeCoverage: stroke.coverage,
     strokeRgb: stroke.rgb,
     strokeEvidence:
       stroke.count >= Math.max(2, Math.ceil(sampleCount * STROKE_MIN_COVERAGE)) &&
       stroke.darkestLuminance <= STROKE_MAX_LUMINANCE,
+    edgeStrokeCoverage: stroke.edgeCoverage,
+    edgeStrokeRgb: stroke.edgeRgb,
+    edgeStrokeEvidence:
+      stroke.edgeCount >= Math.max(2, Math.ceil(sampleCount * STROKE_MIN_COVERAGE)) &&
+      stroke.edgeLuminance <= EDGE_STROKE_MAX_LUMINANCE,
     detailScore,
     isBackground,
     paletteWeight: isBackground
       ? 0.08
       : settings.classic
-        ? 1 + Math.min(2.8, detailScore * 7)
-        : 1 + Math.min(1.6, detailScore * 4)
+        ? 1 + Math.min(2.8, detailScore * 7) + (hasSoftColor ? softColor.coverage * 4 : 0)
+        : 1 + Math.min(1.6, detailScore * 4) + (hasSoftColor ? softColor.coverage * 2.5 : 0)
   };
 }
 
@@ -687,24 +707,49 @@ function getNeutralStrokeSample(samples) {
     );
   });
 
+  const edgeCandidates = samples.filter((sample) => {
+    const luminance = getRgbLuminance(sample.rgb);
+    return (
+      luminance <= EDGE_STROKE_MAX_LUMINANCE &&
+      getRgbChroma(sample.rgb) <= EDGE_STROKE_MAX_CHROMA &&
+      getRgbDistance(sample.rgb, WHITE_RGB) >= EDGE_STROKE_MIN_DISTANCE
+    );
+  });
+
   if (!candidates.length) {
     return {
       count: 0,
       coverage: 0,
       darkestLuminance: 1,
-      rgb: WHITE_RGB
+      rgb: WHITE_RGB,
+      edgeCount: edgeCandidates.length,
+      edgeCoverage: edgeCandidates.length / Math.max(1, samples.length),
+      edgeLuminance: edgeCandidates.length
+        ? Math.min(...edgeCandidates.map((sample) => getRgbLuminance(sample.rgb)))
+        : 1,
+      edgeRgb: edgeCandidates.length
+        ? { ...edgeCandidates[0].rgb }
+        : WHITE_RGB
     };
   }
 
   const darkest = candidates.reduce((best, sample) =>
     getRgbLuminance(sample.rgb) < getRgbLuminance(best.rgb) ? sample : best
   );
+  const edgeDarkest = edgeCandidates.reduce((best, sample) =>
+    getRgbLuminance(sample.rgb) < getRgbLuminance(best.rgb) ? sample : best,
+    edgeCandidates[0]
+  );
 
   return {
     count: candidates.length,
     coverage: candidates.length / Math.max(1, samples.length),
     darkestLuminance: getRgbLuminance(darkest.rgb),
-    rgb: { ...darkest.rgb }
+    rgb: { ...darkest.rgb },
+    edgeCount: edgeCandidates.length,
+    edgeCoverage: edgeCandidates.length / Math.max(1, samples.length),
+    edgeLuminance: edgeCandidates.length ? getRgbLuminance(edgeDarkest.rgb) : 1,
+    edgeRgb: edgeCandidates.length ? { ...edgeDarkest.rgb } : WHITE_RGB
   };
 }
 
@@ -960,12 +1005,29 @@ function normalizeNeutralStrokeColors(colors, cells, palette = []) {
   }
 
   const strokeColor = palette.find((color) => color.code === inferred.code) || inferred;
-  return colors.map((color, index) => {
+  const normalized = colors.map((color, index) => {
     const cell = cells[index];
     if (!cell?.strokeEvidence || !isNeutralDarkColor(color)) {
       return color;
     }
     return cloneColor(strokeColor);
+  });
+
+  const darkStrokeMask = normalized.map((color, index) =>
+    color.code === strokeColor.code && Boolean(cells[index]?.strokeEvidence)
+  );
+
+  return normalized.map((color, index) => {
+    const cell = cells[index];
+    if (!cell?.edgeStrokeEvidence || !isNeutralEdgeColor(color)) {
+      return color;
+    }
+    const x = index % state.gridWidth;
+    const y = Math.floor(index / state.gridWidth);
+    const touchesStroke = getNeighborIndices(x, y, state.gridWidth, state.gridHeight).some(
+      (neighborIndex) => darkStrokeMask[neighborIndex]
+    );
+    return touchesStroke ? cloneColor(strokeColor) : color;
   });
 }
 
@@ -974,6 +1036,15 @@ function isNeutralDarkColor(color) {
     color &&
     getRgbLuminance(color.rgb) <= 0.68 &&
     getRgbChroma(color.rgb) <= STROKE_MAX_CHROMA
+  );
+}
+
+function isNeutralEdgeColor(color) {
+  return Boolean(
+    color &&
+      color.code !== KNOWN_COLOR_MATCHES[0].color.code &&
+      getRgbLuminance(color.rgb) >= 0.42 &&
+      getRgbChroma(color.rgb) <= EDGE_STROKE_MAX_CHROMA
   );
 }
 
