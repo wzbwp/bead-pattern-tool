@@ -14,6 +14,14 @@ const BEAD_COLOR_CODES = Object.entries(COLOR_SERIES_COUNTS).flatMap(([series, c
   Array.from({ length: count }, (_, index) => `${series}${index + 1}`)
 );
 
+const MARD_COLOR_PALETTE_DATA = globalThis.__MARD_COLOR_PALETTE_DATA__ || [];
+const MARD_COLOR_PALETTE = MARD_COLOR_PALETTE_DATA.map(({ code, rgb }) =>
+  createColor(code, `${code.slice(0, 1)}系列色号`, rgb)
+);
+const MARD_COLOR_BY_CODE = new Map(
+  MARD_COLOR_PALETTE.map((color) => [color.code, color])
+);
+
 const COLOR_PACKAGES = [
   { size: 0, label: "自动匹配颜色", outputLimit: 72 },
   {
@@ -33,11 +41,15 @@ const PANEL_PRESETS = [52, 78, 104];
 
 const KNOWN_COLOR_MATCHES = [
   {
-    color: createColor("H2", "白色", { r: 255, g: 255, b: 255 }),
+    color:
+      MARD_COLOR_BY_CODE.get("H2") ||
+      createColor("H2", "白色", { r: 255, g: 255, b: 255 }),
     maxDelta: 6
   },
   {
-    color: createColor("H7", "黑色", { r: 17, g: 17, b: 17 }),
+    color:
+      MARD_COLOR_BY_CODE.get("H7") ||
+      createColor("H7", "黑色", { r: 17, g: 17, b: 17 }),
     maxDelta: 12
   }
 ];
@@ -1717,10 +1729,6 @@ function createColor(code, name, rgb) {
 }
 
 function findKnownColorMatch(rgb) {
-  if (isMardBlack(rgb)) {
-    return KNOWN_COLOR_MATCHES.find((entry) => entry.color.code === "H7").color;
-  }
-
   const hex = rgbToHex(rgb).toUpperCase();
   const exactMatch = KNOWN_COLOR_MATCHES.find((entry) => entry.color.hex.toUpperCase() === hex);
   if (exactMatch) {
@@ -1744,13 +1752,6 @@ function cloneColor(color) {
 }
 
 function assignBeadColorCodes(colors) {
-  const usedCodes = new Set(
-    colors
-      .filter((color) => isFixedColorCode(color.code))
-      .map((color) => color.code)
-  );
-  const generatedCodeMap = new Map();
-
   return colors.map((color) => {
     if (isFixedColorCode(color.code)) {
       return cloneColor(color);
@@ -1758,29 +1759,31 @@ function assignBeadColorCodes(colors) {
 
     const knownColor = findKnownColorMatch(color.rgb);
     if (knownColor) {
-      usedCodes.add(knownColor.code);
-      return {
-        ...cloneColor(color),
-        code: knownColor.code,
-        name: knownColor.name
-      };
+      return cloneColor(knownColor);
     }
 
-    const sourceKey = getGeneratedColorKey(color);
-    let code = generatedCodeMap.get(sourceKey);
-
-    if (!code) {
-      code = getMardColorCode(color.rgb, usedCodes);
-      generatedCodeMap.set(sourceKey, code);
-      usedCodes.add(code);
-    }
-
-    return {
-      ...cloneColor(color),
-      code,
-      name: getGeneratedColorName(code)
-    };
+    return cloneColor(findClosestMardColor(color.rgb) || color);
   });
+}
+
+function findClosestMardColor(rgb) {
+  if (!MARD_COLOR_PALETTE.length) {
+    return null;
+  }
+
+  const lab = rgbToLab(rgb);
+  let closest = MARD_COLOR_PALETTE[0];
+  let closestDistance = labDistanceSquared(lab, closest.lab);
+
+  for (const candidate of MARD_COLOR_PALETTE.slice(1)) {
+    const distance = labDistanceSquared(lab, candidate.lab);
+    if (distance < closestDistance) {
+      closest = candidate;
+      closestDistance = distance;
+    }
+  }
+
+  return closest;
 }
 
 function isFixedColorCode(code) {
