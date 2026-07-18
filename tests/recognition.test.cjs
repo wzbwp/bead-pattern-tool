@@ -434,6 +434,64 @@ function runClassicSamplingRegression() {
   );
 }
 
+function runDetailAndStrokeCalibrationRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      const width = 9;
+      const height = 9;
+      const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+      for (let y = 2; y < 7; y += 1) {
+        for (let x = 2; x < 7; x += 1) {
+          const index = (y * width + x) * 4;
+          pixels[index] = 245;
+          pixels[index + 1] = 220;
+          pixels[index + 2] = 230;
+          pixels[index + 3] = 255;
+        }
+      }
+      const pink = sampleCellColor(
+        pixels,
+        width,
+        height,
+        width,
+        height,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.classic
+      );
+
+      const mixedColors = [
+        MARD_COLOR_BY_CODE.get("H5"),
+        MARD_COLOR_BY_CODE.get("H6"),
+        MARD_COLOR_BY_CODE.get("M15")
+      ].map(cloneColor);
+      const strokeCells = mixedColors.map((color) => ({
+        strokeEvidence: true,
+        strokeRgb: { r: 1, g: 1, b: 1 },
+        rgb: { ...color.rgb }
+      }));
+      const normalized = normalizeNeutralStrokeColors(
+        mixedColors,
+        strokeCells,
+        MARD_COLOR_PALETTE
+      );
+      return {
+        pink,
+        pinkCode: assignBeadColorCodes([createColor("", "", pink.rgb)])[0].code,
+        strokeCodes: normalized.map((color) => color.code)
+      };
+    })()`,
+    app
+  );
+
+  assert.equal(result.pink.isBackground, false);
+  assert.ok(result.pink.softColorCoverage > 0.2);
+  assert.ok(result.pink.rgb.g < 235);
+  assert.equal(result.pinkCode, "E8");
+  assert.equal(Array.from(new Set(result.strokeCodes)).join(","), "H7");
+}
+
 function runMardColorMatchingRegression() {
   const app = loadApp();
   const result = vm.runInContext(
@@ -550,6 +608,7 @@ runSampledBoundaryPreservationRegression();
 runDefaultPaletteRegression();
 runAdaptivePaletteRegression();
 runClassicSamplingRegression();
+runDetailAndStrokeCalibrationRegression();
 runMardColorMatchingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");

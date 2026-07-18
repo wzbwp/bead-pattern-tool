@@ -65,6 +65,11 @@ const WHITE_DETAIL_CHROMA = 0.08;
 const WHITE_DETAIL_COVERAGE = 0.28;
 const FOREGROUND_SAMPLE_DISTANCE = 34;
 const FOREGROUND_MIN_COVERAGE = 0.035;
+const SOFT_COLOR_MIN_CHROMA = 0.04;
+const SOFT_COLOR_MIN_COVERAGE = 0.04;
+const STROKE_MAX_CHROMA = 0.16;
+const STROKE_MAX_LUMINANCE = 0.38;
+const STROKE_MIN_COVERAGE = 0.02;
 const DEFAULT_COLOR_PACKAGE = 0;
 const RULER_SIZE = 30;
 const LABEL_GAP = 4;
@@ -453,6 +458,10 @@ function sampleImageCells() {
         lab: rgbToLab(rgb),
         alphaCoverage: cell.alphaCoverage,
         whiteDetailCoverage: cell.whiteDetailCoverage,
+        softColorCoverage: cell.softColorCoverage,
+        strokeCoverage: cell.strokeCoverage,
+        strokeRgb: cell.strokeRgb,
+        strokeEvidence: cell.strokeEvidence,
         detailScore: cell.detailScore,
         isBackground: cell.isBackground,
         paletteWeight: cell.paletteWeight
@@ -526,12 +535,18 @@ function sampleCellColor(
   };
   const alphaCoverage = alphaTotal / sampleCount;
   const whiteDetailCoverage = whiteDetailSamples / sampleCount;
+  const softColor = getSoftColorSample(samples);
+  const stroke = getNeutralStrokeSample(samples);
 
   if (alphaCoverage < 0.025 && isNearWhite(baseRgb, 18)) {
     return {
       rgb: WHITE_RGB,
       alphaCoverage,
       whiteDetailCoverage,
+      softColorCoverage: softColor.coverage,
+      strokeCoverage: stroke.coverage,
+      strokeRgb: stroke.rgb,
+      strokeEvidence: false,
       detailScore: 0,
       isBackground: true,
       paletteWeight: 0.04
@@ -577,6 +592,15 @@ function sampleCellColor(
     rgb = blendRgb(rgb, foreground.rgb, blend);
   }
 
+  if (
+    softColor.coverage >= SOFT_COLOR_MIN_COVERAGE &&
+    softColor.chroma >= getRgbChroma(rgb) + 0.012 &&
+    getRgbLuminance(rgb) >= 0.7
+  ) {
+    const accentBlend = clamp01(0.42 + softColor.coverage * 1.6);
+    rgb = blendRgb(rgb, softColor.rgb, accentBlend);
+  }
+
   const isBackground = isNearWhite(rgb, 16) && detailScore < 0.055;
   if (isBackground) {
     rgb = WHITE_RGB;
@@ -588,6 +612,12 @@ function sampleCellColor(
     rgb,
     alphaCoverage,
     whiteDetailCoverage,
+    softColorCoverage: softColor.coverage,
+    strokeCoverage: stroke.coverage,
+    strokeRgb: stroke.rgb,
+    strokeEvidence:
+      stroke.count >= Math.max(2, Math.ceil(sampleCount * STROKE_MIN_COVERAGE)) &&
+      stroke.darkestLuminance <= STROKE_MAX_LUMINANCE,
     detailScore,
     isBackground,
     paletteWeight: isBackground
@@ -595,6 +625,86 @@ function sampleCellColor(
       : settings.classic
         ? 1 + Math.min(2.8, detailScore * 7)
         : 1 + Math.min(1.6, detailScore * 4)
+  };
+}
+
+function getSoftColorSample(samples) {
+  let count = 0;
+  let totalWeight = 0;
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  for (const sample of samples) {
+    const luminance = getRgbLuminance(sample.rgb);
+    const chroma = getRgbChroma(sample.rgb);
+    const whiteDistance = getRgbDistance(sample.rgb, WHITE_RGB) / 441.7;
+    if (
+      luminance < 0.7 ||
+      chroma < SOFT_COLOR_MIN_CHROMA ||
+      whiteDistance < 0.025
+    ) {
+      continue;
+    }
+
+    const chromaStrength = clamp01((chroma - SOFT_COLOR_MIN_CHROMA) / 0.18);
+    const distanceStrength = clamp01((whiteDistance - 0.025) / 0.22);
+    const weight = 0.45 + chromaStrength * 1.4 + distanceStrength * 0.8;
+    red += sample.rgb.r * weight;
+    green += sample.rgb.g * weight;
+    blue += sample.rgb.b * weight;
+    totalWeight += weight;
+    count += 1;
+  }
+
+  if (!totalWeight) {
+    return {
+      coverage: 0,
+      chroma: 0,
+      rgb: WHITE_RGB
+    };
+  }
+
+  const rgb = {
+    r: Math.round(red / totalWeight),
+    g: Math.round(green / totalWeight),
+    b: Math.round(blue / totalWeight)
+  };
+  return {
+    coverage: count / Math.max(1, samples.length),
+    chroma: getRgbChroma(rgb),
+    rgb
+  };
+}
+
+function getNeutralStrokeSample(samples) {
+  const candidates = samples.filter((sample) => {
+    const luminance = getRgbLuminance(sample.rgb);
+    return (
+      luminance <= STROKE_MAX_LUMINANCE &&
+      getRgbChroma(sample.rgb) <= STROKE_MAX_CHROMA &&
+      getRgbDistance(sample.rgb, WHITE_RGB) >= 80
+    );
+  });
+
+  if (!candidates.length) {
+    return {
+      count: 0,
+      coverage: 0,
+      darkestLuminance: 1,
+      rgb: WHITE_RGB
+    };
+  }
+
+  const darkest = candidates.reduce((best, sample) =>
+    getRgbLuminance(sample.rgb) < getRgbLuminance(best.rgb) ? sample : best
+  );
+
+  return {
+    count: candidates.length,
+    coverage: candidates.length / Math.max(1, samples.length),
+    darkestLuminance: getRgbLuminance(darkest.rgb),
+    rgb: { ...darkest.rgb }
   };
 }
 
@@ -647,7 +757,11 @@ function collectCellSamples(
         state.gridHeight,
         state.mirrorY
       );
-      samples.push(getPixel(data, sourceWidth, sourceHeight, sampleX, sampleY));
+      samples.push({
+        ...getPixel(data, sourceWidth, sourceHeight, sampleX, sampleY),
+        x: sampleX,
+        y: sampleY
+      });
     }
   }
 
@@ -821,10 +935,46 @@ function mapCellsToPattern(cells) {
   }
 
   return {
-    colors,
+    colors: normalizeNeutralStrokeColors(colors, cells, palette),
     palette,
     averageDelta: colors.length ? totalDistance / colors.length : 0
   };
+}
+
+function normalizeNeutralStrokeColors(colors, cells, palette = []) {
+  const strokeCells = cells
+    .map((cell, index) => ({ cell, index }))
+    .filter(({ cell }) => cell?.strokeEvidence && cell.strokeRgb);
+  if (strokeCells.length < 2) {
+    return colors;
+  }
+
+  const darkestCell = strokeCells.reduce((best, current) =>
+    getRgbLuminance(current.cell.strokeRgb) < getRgbLuminance(best.cell.strokeRgb)
+      ? current
+      : best
+  );
+  const inferred = findClosestMardColor(darkestCell.cell.strokeRgb);
+  if (!inferred) {
+    return colors;
+  }
+
+  const strokeColor = palette.find((color) => color.code === inferred.code) || inferred;
+  return colors.map((color, index) => {
+    const cell = cells[index];
+    if (!cell?.strokeEvidence || !isNeutralDarkColor(color)) {
+      return color;
+    }
+    return cloneColor(strokeColor);
+  });
+}
+
+function isNeutralDarkColor(color) {
+  return (
+    color &&
+    getRgbLuminance(color.rgb) <= 0.68 &&
+    getRgbChroma(color.rgb) <= STROKE_MAX_CHROMA
+  );
 }
 
 function refinePatternColors(colors, cells) {
