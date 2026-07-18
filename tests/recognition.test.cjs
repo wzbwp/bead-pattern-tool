@@ -99,7 +99,12 @@ function loadApp() {
     }
   };
   vm.createContext(sandbox);
+  const paletteSource = fs.readFileSync(
+    path.join(__dirname, "..", "assets", "mard-palette.js"),
+    "utf8"
+  );
   const source = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
+  vm.runInContext(paletteSource, sandbox);
   vm.runInContext(source, sandbox);
   return sandbox;
 }
@@ -449,22 +454,22 @@ function runMardColorMatchingRegression() {
       const reordered = assignBeadColorCodes([...inputs].reverse());
       return {
         codes: assigned.map((color) => color.code),
-        reorderedBlack: reordered.find((color) => color.rgb.r === 18).code,
+        reorderedBlack: reordered.find((color) => color.code === "H7").code,
         directBlack: createAutoColor({ r: 30, g: 30, b: 30 }, 0).code
       };
     })()`,
     app
   );
 
-  assert.equal(result.codes[0].startsWith("F"), true);
+  assert.equal(result.codes[0], "F25");
   assert.equal(result.codes[1], "H7");
-  assert.equal(result.codes[2].startsWith("A"), true);
-  assert.equal(result.codes[3].startsWith("B"), true);
-  assert.equal(result.codes[4].startsWith("C"), true);
-  assert.equal(result.codes[5].startsWith("D"), true);
-  assert.equal(result.codes[6].startsWith("E"), true);
-  assert.equal(result.codes[7].startsWith("G"), true);
-  assert.equal(result.codes[8].startsWith("H"), true);
+  assert.equal(result.codes[2], "A26");
+  assert.equal(result.codes[3], "B8");
+  assert.equal(result.codes[4], "C20");
+  assert.equal(result.codes[5], "D7");
+  assert.equal(result.codes[6], "E4");
+  assert.equal(result.codes[7], "F10");
+  assert.equal(result.codes[8], "H4");
   assert.equal(result.codes[9], "H2");
   assert.equal(result.reorderedBlack, "H7");
   assert.equal(result.directBlack, "H7");
