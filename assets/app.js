@@ -84,6 +84,14 @@ const SAMPLE_MODE_SETTINGS = {
     preserveLines: false,
     classic: true
   },
+  dominant: {
+    samplesPerAxis: 9,
+    detailBoost: 2.2,
+    colorBoost: 0.1,
+    preserveLines: true,
+    dominant: true,
+    classic: false
+  },
   enhanced: {
     samplesPerAxis: 9,
     detailBoost: 2.6,
@@ -125,6 +133,23 @@ const state = {
   imageScale: 1,
   imageOffsetX: 0,
   imageOffsetY: 0,
+  editor: {
+    image: null,
+    originalImage: null,
+    rotation: 0,
+    flipX: false,
+    flipY: false,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    crop: null,
+    dragging: false,
+    dragMode: "pan",
+    dragStart: null,
+    cropStart: null
+  },
+  exportPreviewCanvas: null,
+  exportPreviewUrl: "",
   showGrid: true,
   showCodes: false,
   activeColorLimit: 8,
@@ -136,6 +161,24 @@ const els = {
   dropzone: document.querySelector("#dropzone"),
   fileMeta: document.querySelector("#fileMeta"),
   sourcePreview: document.querySelector("#sourcePreview"),
+  editImageButton: document.querySelector("#editImageButton"),
+  imageEditorModal: document.querySelector("#imageEditorModal"),
+  imageEditorCanvas: document.querySelector("#imageEditorCanvas"),
+  imageEditorZoom: document.querySelector("#imageEditorZoom"),
+  imageEditorStatus: document.querySelector("#imageEditorStatus"),
+  closeImageEditor: document.querySelector("#closeImageEditor"),
+  cancelImageEditor: document.querySelector("#cancelImageEditor"),
+  applyImageEditor: document.querySelector("#applyImageEditor"),
+  rotateImage: document.querySelector("#rotateImage"),
+  flipImageX: document.querySelector("#flipImageX"),
+  flipImageY: document.querySelector("#flipImageY"),
+  resetImageEditor: document.querySelector("#resetImageEditor"),
+  removeImageBackground: document.querySelector("#removeImageBackground"),
+  exportPreviewModal: document.querySelector("#exportPreviewModal"),
+  exportPreviewImage: document.querySelector("#exportPreviewImage"),
+  closeExportPreview: document.querySelector("#closeExportPreview"),
+  cancelExportPreview: document.querySelector("#cancelExportPreview"),
+  confirmExportPng: document.querySelector("#confirmExportPng"),
   imageScale: document.querySelector("#imageScale"),
   imageOffsetX: document.querySelector("#imageOffsetX"),
   imageOffsetY: document.querySelector("#imageOffsetY"),
@@ -195,6 +238,24 @@ function bindEvents() {
       loadFile(file);
     }
   });
+
+  els.editImageButton.addEventListener("click", openImageEditor);
+  els.closeImageEditor.addEventListener("click", closeImageEditor);
+  els.cancelImageEditor.addEventListener("click", closeImageEditor);
+  els.applyImageEditor.addEventListener("click", applyImageEditor);
+  els.rotateImage.addEventListener("click", () => updateImageEditor({ rotation: state.editor.rotation + 90 }));
+  els.flipImageX.addEventListener("click", () => updateImageEditor({ flipX: !state.editor.flipX }));
+  els.flipImageY.addEventListener("click", () => updateImageEditor({ flipY: !state.editor.flipY }));
+  els.resetImageEditor.addEventListener("click", resetImageEditor);
+  els.removeImageBackground.addEventListener("click", removeImageBackground);
+  els.imageEditorZoom.addEventListener("input", () => {
+    updateImageEditor({ zoom: Number(els.imageEditorZoom.value) / 100 });
+  });
+  bindImageEditorPointerEvents();
+
+  els.closeExportPreview.addEventListener("click", closeExportPreview);
+  els.cancelExportPreview.addEventListener("click", closeExportPreview);
+  els.confirmExportPng.addEventListener("click", confirmExportPng);
 
   ["dragenter", "dragover"].forEach((eventName) => {
     els.dropzone.addEventListener(eventName, (event) => {
@@ -334,25 +395,13 @@ function loadFile(file) {
   reader.onload = () => {
     const img = new Image();
     img.onload = () => {
-      state.image = img;
+      state.editor.originalImage = img;
+      state.editor.image = img;
       state.imageName = file.name;
+      els.editImageButton.disabled = false;
       els.fileMeta.textContent = `${file.name} · ${img.naturalWidth} x ${img.naturalHeight}`;
-      state.imageScale = 1;
-      state.imageOffsetX = 0;
-      state.imageOffsetY = 0;
-      els.imageScale.value = "100";
-      els.imageOffsetX.value = "0";
-      els.imageOffsetY.value = "0";
-      els.sourcePreview.innerHTML = "";
-
-      const preview = document.createElement("img");
-      preview.src = reader.result;
-      preview.alt = file.name;
-      els.sourcePreview.appendChild(preview);
-      updateSourcePreviewTransform();
-
-      syncHeightFromRatio();
-      parseImage();
+      resetImageEditor();
+      openImageEditor();
     };
     img.onerror = () => {
       setStatus("图片读取失败", false);
@@ -360,6 +409,322 @@ function loadFile(file) {
     img.src = reader.result;
   };
   reader.readAsDataURL(file);
+}
+
+function openImageEditor() {
+  if (!state.editor.image) {
+    return;
+  }
+  els.imageEditorModal.hidden = false;
+  document.body.classList.add("modal-open");
+  drawImageEditor();
+}
+
+function closeImageEditor() {
+  els.imageEditorModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function updateImageEditor(changes = {}) {
+  Object.assign(state.editor, changes);
+  drawImageEditor();
+}
+
+function resetImageEditor() {
+  if (!state.editor.originalImage && !state.editor.image) {
+    return;
+  }
+  state.editor.image = state.editor.originalImage || state.editor.image;
+  state.editor.rotation = 0;
+  state.editor.flipX = false;
+  state.editor.flipY = false;
+  state.editor.zoom = 1;
+  state.editor.panX = 0;
+  state.editor.panY = 0;
+  state.editor.crop = null;
+  els.imageEditorZoom.value = "100";
+  els.imageEditorStatus.textContent = "保留主体颜色，去除与边缘连通的背景";
+  drawImageEditor();
+}
+
+function bindImageEditorPointerEvents() {
+  const canvas = els.imageEditorCanvas;
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!state.editor.image) return;
+    const point = getEditorPoint(event);
+    const crop = getEditorCropRect();
+    const nearHandle = getCropHandle(point, crop);
+    state.editor.dragging = true;
+    state.editor.dragMode = nearHandle ? "resize" : isPointInRect(point, crop) ? "crop" : "pan";
+    state.editor.dragStart = point;
+    state.editor.cropStart = { ...crop };
+    canvas.setPointerCapture?.(event.pointerId);
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!state.editor.dragging) return;
+    const current = getEditorPoint(event);
+    const start = state.editor.dragStart;
+    const dx = current.x - start.x;
+    const dy = current.y - start.y;
+    if (state.editor.dragMode === "pan") {
+      state.editor.panX += dx;
+      state.editor.panY += dy;
+      state.editor.dragStart = current;
+    } else if (state.editor.dragMode === "crop") {
+      state.editor.crop = clampCropRect({
+        ...state.editor.cropStart,
+        x: state.editor.cropStart.x + dx,
+        y: state.editor.cropStart.y + dy
+      });
+    } else {
+      state.editor.crop = resizeCropRect(state.editor.cropStart, dx, dy);
+    }
+    drawImageEditor();
+  });
+  ["pointerup", "pointercancel"].forEach((eventName) => {
+    canvas.addEventListener(eventName, (event) => {
+      state.editor.dragging = false;
+      canvas.releasePointerCapture?.(event.pointerId);
+    });
+  });
+}
+
+function getEditorPoint(event) {
+  const rect = els.imageEditorCanvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) * (els.imageEditorCanvas.width / rect.width),
+    y: (event.clientY - rect.top) * (els.imageEditorCanvas.height / rect.height)
+  };
+}
+
+function getEditorLayout() {
+  const canvas = els.imageEditorCanvas;
+  const image = state.editor.image;
+  const rotated = Math.abs(state.editor.rotation % 180) === 90;
+  const imageWidth = rotated ? image.naturalHeight : image.naturalWidth;
+  const imageHeight = rotated ? image.naturalWidth : image.naturalHeight;
+  const scale = Math.min((canvas.width - 72) / imageWidth, (canvas.height - 72) / imageHeight) * state.editor.zoom;
+  return {
+    scale: Math.max(0.05, scale),
+    centerX: canvas.width / 2 + state.editor.panX,
+    centerY: canvas.height / 2 + state.editor.panY,
+    imageWidth,
+    imageHeight
+  };
+}
+
+function getEditorCropRect() {
+  const canvas = els.imageEditorCanvas;
+  if (!state.editor.crop) {
+    const size = Math.min(canvas.width, canvas.height) * 0.78;
+    state.editor.crop = clampCropRect({
+      x: (canvas.width - size) / 2,
+      y: (canvas.height - size) / 2,
+      width: size,
+      height: size
+    });
+  }
+  return state.editor.crop;
+}
+
+function clampCropRect(rect) {
+  const canvas = els.imageEditorCanvas;
+  const minSize = 96;
+  const width = Math.max(minSize, Math.min(canvas.width, rect.width));
+  const height = Math.max(minSize, Math.min(canvas.height, rect.height));
+  return {
+    width,
+    height,
+    x: Math.max(0, Math.min(canvas.width - width, rect.x)),
+    y: Math.max(0, Math.min(canvas.height - height, rect.y))
+  };
+}
+
+function resizeCropRect(rect, dx, dy) {
+  const size = Math.max(96, Math.min(
+    Math.min(els.imageEditorCanvas.width, els.imageEditorCanvas.height),
+    Math.max(rect.width + dx, rect.height + dy)
+  ));
+  return clampCropRect({
+    x: rect.x,
+    y: rect.y,
+    width: size,
+    height: size
+  });
+}
+
+function getCropHandle(point, crop) {
+  const distance = Math.hypot(point.x - (crop.x + crop.width), point.y - (crop.y + crop.height));
+  return distance <= 28;
+}
+
+function isPointInRect(point, rect) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function drawImageEditor() {
+  const canvas = els.imageEditorCanvas;
+  const editorCtx = canvas.getContext("2d");
+  if (!editorCtx || !state.editor.image) return;
+  const layout = getEditorLayout();
+  const crop = getEditorCropRect();
+  editorCtx.clearRect(0, 0, canvas.width, canvas.height);
+  editorCtx.fillStyle = "#172126";
+  editorCtx.fillRect(0, 0, canvas.width, canvas.height);
+  editorCtx.save();
+  editorCtx.translate(layout.centerX, layout.centerY);
+  editorCtx.rotate((state.editor.rotation * Math.PI) / 180);
+  editorCtx.scale((state.editor.flipX ? -1 : 1) * layout.scale, (state.editor.flipY ? -1 : 1) * layout.scale);
+  editorCtx.imageSmoothingEnabled = true;
+  editorCtx.drawImage(state.editor.image, -state.editor.image.naturalWidth / 2, -state.editor.image.naturalHeight / 2);
+  editorCtx.restore();
+
+  editorCtx.save();
+  editorCtx.fillStyle = "rgba(10, 18, 20, 0.58)";
+  editorCtx.fillRect(0, 0, canvas.width, crop.y);
+  editorCtx.fillRect(0, crop.y, crop.x, crop.height);
+  editorCtx.fillRect(crop.x + crop.width, crop.y, canvas.width - crop.x - crop.width, crop.height);
+  editorCtx.fillRect(0, crop.y + crop.height, canvas.width, canvas.height - crop.y - crop.height);
+  editorCtx.strokeStyle = "#ffffff";
+  editorCtx.lineWidth = 2;
+  editorCtx.strokeRect(crop.x, crop.y, crop.width, crop.height);
+  editorCtx.fillStyle = "#ffffff";
+  editorCtx.fillRect(crop.x + crop.width - 12, crop.y + crop.height - 12, 24, 24);
+  editorCtx.restore();
+}
+
+function applyImageEditor() {
+  if (!state.editor.image) return;
+  const output = renderEditedImage();
+  const img = new Image();
+  img.onload = () => {
+    state.image = img;
+    state.editor.image = img;
+    state.editor.originalImage = img;
+    state.imageScale = 1;
+    state.imageOffsetX = 0;
+    state.imageOffsetY = 0;
+    els.fileMeta.textContent = `${state.imageName} · ${img.naturalWidth} x ${img.naturalHeight}`;
+    els.imageScale.value = "100";
+    els.imageOffsetX.value = "0";
+    els.imageOffsetY.value = "0";
+    els.sourcePreview.innerHTML = "";
+    const preview = document.createElement("img");
+    preview.src = output.toDataURL("image/png");
+    preview.alt = state.imageName;
+    els.sourcePreview.appendChild(preview);
+    updateSourcePreviewTransform();
+    closeImageEditor();
+    syncHeightFromRatio();
+    parseImage();
+  };
+  img.src = output.toDataURL("image/png");
+}
+
+function renderEditedImage() {
+  const crop = getEditorCropRect();
+  const layout = getEditorLayout();
+  const output = document.createElement("canvas");
+  output.width = Math.max(1, Math.round(crop.width / layout.scale));
+  output.height = Math.max(1, Math.round(crop.height / layout.scale));
+  const outputCtx = output.getContext("2d");
+  outputCtx.clearRect(0, 0, output.width, output.height);
+  outputCtx.translate((layout.centerX - crop.x) / layout.scale, (layout.centerY - crop.y) / layout.scale);
+  outputCtx.rotate((state.editor.rotation * Math.PI) / 180);
+  outputCtx.scale(state.editor.flipX ? -1 : 1, state.editor.flipY ? -1 : 1);
+  outputCtx.drawImage(state.editor.image, -state.editor.image.naturalWidth / 2, -state.editor.image.naturalHeight / 2);
+  return output;
+}
+
+function removeImageBackground() {
+  const canvas = renderEditedImage();
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const removed = floodRemoveBackground(imageData);
+  context.putImageData(removed.imageData, 0, 0);
+  const img = new Image();
+  img.onload = () => {
+    state.editor.image = img;
+    state.editor.originalImage = img;
+    state.editor.rotation = 0;
+    state.editor.flipX = false;
+    state.editor.flipY = false;
+    state.editor.zoom = 1;
+    state.editor.panX = 0;
+    state.editor.panY = 0;
+    state.editor.crop = null;
+    els.imageEditorZoom.value = "100";
+    els.imageEditorStatus.textContent = `已移除 ${removed.count.toLocaleString()} 个背景像素，可继续调整主体范围`;
+    drawImageEditor();
+  };
+  img.src = canvas.toDataURL("image/png");
+}
+
+function floodRemoveBackground(imageData) {
+  const { data, width, height } = imageData;
+  const visited = new Uint8Array(width * height);
+  const queue = [];
+  const background = getBorderReferenceColor(data, width, height);
+  const enqueue = (x, y) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const index = y * width + x;
+    if (visited[index]) return;
+    const pixelIndex = index * 4;
+    if (!isBackgroundPixel(data[pixelIndex], data[pixelIndex + 1], data[pixelIndex + 2], background)) return;
+    visited[index] = 1;
+    queue.push(index);
+  };
+  for (let x = 0; x < width; x += 1) {
+    enqueue(x, 0);
+    enqueue(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueue(0, y);
+    enqueue(width - 1, y);
+  }
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const index = queue[cursor];
+    const x = index % width;
+    const y = Math.floor(index / width);
+    enqueue(x - 1, y);
+    enqueue(x + 1, y);
+    enqueue(x, y - 1);
+    enqueue(x, y + 1);
+  }
+  let count = 0;
+  for (let index = 0; index < visited.length; index += 1) {
+    if (!visited[index]) continue;
+    data[index * 4 + 3] = 0;
+    count += 1;
+  }
+  return { imageData, count };
+}
+
+function getBorderReferenceColor(data, width, height) {
+  const samples = [];
+  for (let x = 0; x < width; x += Math.max(1, Math.floor(width / 24))) {
+    samples.push(readRawRgb(data, (0 * width + x) * 4));
+    samples.push(readRawRgb(data, ((height - 1) * width + x) * 4));
+  }
+  for (let y = 0; y < height; y += Math.max(1, Math.floor(height / 24))) {
+    samples.push(readRawRgb(data, (y * width) * 4));
+    samples.push(readRawRgb(data, (y * width + width - 1) * 4));
+  }
+  return samples.reduce((total, rgb) => ({
+    r: total.r + rgb.r / samples.length,
+    g: total.g + rgb.g / samples.length,
+    b: total.b + rgb.b / samples.length
+  }), { r: 0, g: 0, b: 0 });
+}
+
+function readRawRgb(data, index) {
+  return { r: data[index], g: data[index + 1], b: data[index + 2] };
+}
+
+function isBackgroundPixel(r, g, b, reference) {
+  const distance = Math.hypot(r - reference.r, g - reference.g, b - reference.b);
+  const luminance = getRgbLuminance({ r, g, b });
+  return distance <= 48 || (distance <= 74 && luminance >= 0.72);
 }
 
 function updateSourcePreviewTransform() {
@@ -606,6 +971,13 @@ function sampleCellColor(
     rgb = blendRgb(rgb, foreground.rgb, blend);
   }
 
+  if (settings.dominant) {
+    const dominant = getDominantColorSample(samples, baseRgb);
+    if (dominant.coverage >= 0.2) {
+      rgb = blendRgb(rgb, dominant.rgb, clamp01(0.5 + dominant.coverage * 0.7));
+    }
+  }
+
   if (
     softColor.coverage >= SOFT_COLOR_MIN_COVERAGE &&
     softColor.chroma >= getRgbChroma(rgb) + 0.012 &&
@@ -645,6 +1017,65 @@ function sampleCellColor(
       : settings.classic
         ? 1 + Math.min(2.8, detailScore * 7) + (hasSoftColor ? softColor.coverage * 4 : 0)
         : 1 + Math.min(1.6, detailScore * 4) + (hasSoftColor ? softColor.coverage * 2.5 : 0)
+  };
+}
+
+function getDominantColorSample(samples, baseRgb) {
+  const clusters = new Map();
+  for (const sample of samples) {
+    if (sample.alpha < 0.08) continue;
+    const distance = getRgbDistance(sample.rgb, baseRgb);
+    const key = [
+      Math.round(sample.rgb.r / 16),
+      Math.round(sample.rgb.g / 16),
+      Math.round(sample.rgb.b / 16)
+    ].join(":");
+    const weight = Math.max(0.35, sample.alpha * (1 + Math.min(1.8, distance / 120)));
+    const cluster = clusters.get(key);
+    if (cluster) {
+      cluster.count += 1;
+      cluster.weight += weight;
+      cluster.r += sample.rgb.r * weight;
+      cluster.g += sample.rgb.g * weight;
+      cluster.b += sample.rgb.b * weight;
+    } else {
+      clusters.set(key, {
+        count: 1,
+        weight,
+        r: sample.rgb.r * weight,
+        g: sample.rgb.g * weight,
+        b: sample.rgb.b * weight
+      });
+    }
+  }
+
+  const clusterList = [...clusters.values()].map((cluster) => ({
+    ...cluster,
+    rgb: {
+      r: Math.round(cluster.r / cluster.weight),
+      g: Math.round(cluster.g / cluster.weight),
+      b: Math.round(cluster.b / cluster.weight)
+    }
+  }));
+  const coloredClusters = clusterList.filter(
+    (cluster) =>
+      getRgbDistance(cluster.rgb, WHITE_RGB) >= 28 && getRgbChroma(cluster.rgb) >= 0.035
+  );
+  const dominant = (coloredClusters.length ? coloredClusters : clusterList).sort((a, b) => {
+    const colorPriority = (cluster) =>
+      cluster.weight * (1 + getRgbChroma(cluster.rgb) * 1.8);
+    return colorPriority(b) - colorPriority(a);
+  })[0];
+  if (!dominant) {
+    return { coverage: 0, rgb: baseRgb };
+  }
+  return {
+    coverage: dominant.count / Math.max(1, samples.length),
+    rgb: {
+      r: dominant.rgb.r,
+      g: dominant.rgb.g,
+      b: dominant.rgb.b
+    }
   };
 }
 
@@ -1721,10 +2152,31 @@ function exportPng() {
   }
 
   const exportCanvas = createExportCanvas();
+  state.exportPreviewCanvas = exportCanvas;
+  if (state.exportPreviewUrl) {
+    URL.revokeObjectURL(state.exportPreviewUrl);
+  }
+  state.exportPreviewUrl = exportCanvas.toDataURL("image/png");
+  els.exportPreviewImage.src = state.exportPreviewUrl;
+  els.exportPreviewModal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function closeExportPreview() {
+  els.exportPreviewModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function confirmExportPng() {
+  if (!state.exportPreviewCanvas) {
+    return;
+  }
+
   const link = document.createElement("a");
   link.download = `${baseFileName()}-pattern.png`;
-  link.href = exportCanvas.toDataURL("image/png");
+  link.href = state.exportPreviewCanvas.toDataURL("image/png");
   link.click();
+  closeExportPreview();
 }
 
 function createExportCanvas() {

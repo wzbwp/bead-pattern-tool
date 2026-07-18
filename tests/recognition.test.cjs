@@ -540,6 +540,67 @@ function runDetailAndStrokeCalibrationRegression() {
   assert.equal(Array.from(result.edgeCodes).join(","), "H7,H7,H14,H2,H7");
 }
 
+function runEditorProcessingRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      const width = 7;
+      const height = 7;
+      const imageData = {
+        width,
+        height,
+        data: new Uint8ClampedArray(width * height * 4).fill(255)
+      };
+      const indexAt = (x, y) => (y * width + x) * 4;
+      for (let y = 2; y <= 4; y += 1) {
+        for (let x = 2; x <= 4; x += 1) {
+          const index = indexAt(x, y);
+          imageData.data[index] = 18;
+          imageData.data[index + 1] = 18;
+          imageData.data[index + 2] = 18;
+          imageData.data[index + 3] = 255;
+        }
+      }
+      const processed = floodRemoveBackground(imageData);
+      const center = imageData.data[indexAt(3, 3) + 3];
+      const corner = imageData.data[indexAt(0, 0) + 3];
+
+      const pixels = new Uint8ClampedArray(9 * 9 * 4).fill(255);
+      for (let y = 2; y < 7; y += 1) {
+        for (let x = 2; x < 7; x += 1) {
+          const index = (y * 9 + x) * 4;
+          pixels[index] = 236;
+          pixels[index + 1] = 70;
+          pixels[index + 2] = 84;
+          pixels[index + 3] = 255;
+        }
+      }
+      const dominant = sampleCellColor(
+        pixels,
+        9,
+        9,
+        9,
+        9,
+        0,
+        0,
+        SAMPLE_MODE_SETTINGS.dominant
+      );
+      return {
+        removed: processed.count,
+        center,
+        corner,
+        dominantCode: assignBeadColorCodes([createColor("", "", dominant.rgb)])[0].code
+      };
+    })()`,
+    app
+  );
+
+  assert.equal(result.center, 255);
+  assert.equal(result.corner, 0);
+  assert.ok(result.removed >= 40);
+  assert.equal(result.dominantCode.startsWith("F"), true);
+}
+
 function runMardColorMatchingRegression() {
   const app = loadApp();
   const result = vm.runInContext(
@@ -657,6 +718,7 @@ runDefaultPaletteRegression();
 runAdaptivePaletteRegression();
 runClassicSamplingRegression();
 runDetailAndStrokeCalibrationRegression();
+runEditorProcessingRegression();
 runMardColorMatchingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
