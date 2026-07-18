@@ -8,7 +8,7 @@
       content="纯前端拼豆图纸解析工具，上传图片后解析为拼豆色号和小色块图纸。"
     />
     <title>拼豆图纸解析工具</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=mard-11" />
+    <link rel="stylesheet" href="./assets/styles.css?v=mard-15" />
   </head>
   <body>
     <div class="app-shell">
@@ -33,6 +33,9 @@
             <div class="source-preview" id="sourcePreview">
               <span>未选择图片</span>
             </div>
+            <button class="button image-edit-button" id="editImageButton" type="button" disabled>
+              编辑上传图片
+            </button>
             <label class="field">
               <span>原图取景缩放</span>
               <input id="imageScale" type="range" min="50" max="300" value="100" />
@@ -82,6 +85,7 @@
               <span>采样方式</span>
               <select id="sampleMode">
                 <option value="classic" selected>经典还原（原版效果）</option>
+                <option value="dominant">主导色采样（卡通图）</option>
                 <option value="enhanced">平衡还原</option>
                 <option value="average">区域平均</option>
                 <option value="center">中心取样</option>
@@ -178,7 +182,64 @@
       </main>
     </div>
 
-    <script src="./assets/mard-palette.js?v=mard-14" defer></script>
-    <script src="./assets/app.js?v=mard-14" defer></script>
+    <div class="modal-backdrop image-editor-modal" id="imageEditorModal" hidden>
+      <section class="image-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="imageEditorTitle">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Image Editor</p>
+            <h2 id="imageEditorTitle">编辑上传图片</h2>
+          </div>
+          <button class="icon-button" id="closeImageEditor" type="button" aria-label="取消编辑" title="取消编辑">×</button>
+        </header>
+        <div class="image-editor-workspace">
+          <div class="image-editor-canvas-wrap">
+            <canvas id="imageEditorCanvas" width="960" height="620"></canvas>
+            <span class="editor-hint">拖动框选区域，框外可平移图片</span>
+          </div>
+          <aside class="image-editor-controls" aria-label="图片编辑工具">
+            <div class="editor-tool-grid">
+              <button class="tool-button" id="rotateImage" type="button">↻<span>旋转</span></button>
+              <button class="tool-button" id="flipImageX" type="button">↔<span>水平翻转</span></button>
+              <button class="tool-button" id="flipImageY" type="button">↕<span>垂直翻转</span></button>
+              <button class="tool-button" id="resetImageEditor" type="button">↺<span>重置</span></button>
+            </div>
+            <label class="editor-range">
+              <span>图片缩放</span>
+              <input id="imageEditorZoom" type="range" min="50" max="240" value="100" />
+            </label>
+            <button class="button background-button" id="removeImageBackground" type="button">
+              一键去除背景
+            </button>
+            <span class="editor-status" id="imageEditorStatus">保留主体颜色，去除与边缘连通的背景</span>
+          </aside>
+        </div>
+        <footer class="modal-footer">
+          <button class="button" id="cancelImageEditor" type="button">取消</button>
+          <button class="button primary" id="applyImageEditor" type="button">使用处理后的图片</button>
+        </footer>
+      </section>
+    </div>
+
+    <div class="modal-backdrop export-preview-modal" id="exportPreviewModal" hidden>
+      <section class="export-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="exportPreviewTitle">
+        <header class="modal-header">
+          <div>
+            <p class="eyebrow">Export Preview</p>
+            <h2 id="exportPreviewTitle">下载前预览</h2>
+          </div>
+          <button class="icon-button" id="closeExportPreview" type="button" aria-label="关闭预览" title="关闭预览">×</button>
+        </header>
+        <div class="export-preview-stage">
+          <img id="exportPreviewImage" alt="导出图纸预览" />
+        </div>
+        <footer class="modal-footer">
+          <button class="button" id="cancelExportPreview" type="button">返回修改</button>
+          <button class="button primary" id="confirmExportPng" type="button">确认下载 PNG</button>
+        </footer>
+      </section>
+    </div>
+
+    <script src="./assets/mard-palette.js?v=mard-15" defer></script>
+    <script src="./assets/app.js?v=mard-15" defer></script>
   </body>
 </html>
