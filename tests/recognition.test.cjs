@@ -438,6 +438,8 @@ function runDetailAndStrokeCalibrationRegression() {
   const app = loadApp();
   const result = vm.runInContext(
     `(() => {
+      state.gridWidth = 5;
+      state.gridHeight = 1;
       const width = 9;
       const height = 9;
       const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
@@ -476,10 +478,55 @@ function runDetailAndStrokeCalibrationRegression() {
         strokeCells,
         MARD_COLOR_PALETTE
       );
+      const edgeColors = [
+        MARD_COLOR_BY_CODE.get("H7"),
+        MARD_COLOR_BY_CODE.get("H14"),
+        MARD_COLOR_BY_CODE.get("H14"),
+        MARD_COLOR_BY_CODE.get("H2"),
+        MARD_COLOR_BY_CODE.get("H7")
+      ].map(cloneColor);
+      const edgeCells = [
+        {
+          strokeEvidence: true,
+          strokeRgb: { r: 1, g: 1, b: 1 },
+          edgeStrokeEvidence: true,
+          edgeStrokeRgb: { r: 204, g: 215, b: 209 }
+        },
+        {
+          strokeEvidence: false,
+          strokeRgb: { r: 255, g: 255, b: 255 },
+          edgeStrokeEvidence: true,
+          edgeStrokeRgb: { r: 204, g: 215, b: 209 }
+        },
+        {
+          strokeEvidence: false,
+          strokeRgb: { r: 255, g: 255, b: 255 },
+          edgeStrokeEvidence: false,
+          edgeStrokeRgb: { r: 255, g: 255, b: 255 }
+        },
+        {
+          strokeEvidence: false,
+          strokeRgb: { r: 255, g: 255, b: 255 },
+          edgeStrokeEvidence: false,
+          edgeStrokeRgb: { r: 255, g: 255, b: 255 }
+        },
+        {
+          strokeEvidence: true,
+          strokeRgb: { r: 1, g: 1, b: 1 },
+          edgeStrokeEvidence: true,
+          edgeStrokeRgb: { r: 1, g: 1, b: 1 }
+        }
+      ];
+      const normalizedEdges = normalizeNeutralStrokeColors(
+        edgeColors,
+        edgeCells,
+        MARD_COLOR_PALETTE
+      );
       return {
         pink,
         pinkCode: assignBeadColorCodes([createColor("", "", pink.rgb)])[0].code,
-        strokeCodes: normalized.map((color) => color.code)
+        strokeCodes: normalized.map((color) => color.code),
+        edgeCodes: normalizedEdges.map((color) => color.code)
       };
     })()`,
     app
@@ -490,6 +537,7 @@ function runDetailAndStrokeCalibrationRegression() {
   assert.ok(result.pink.rgb.g < 235);
   assert.equal(result.pinkCode, "E8");
   assert.equal(Array.from(new Set(result.strokeCodes)).join(","), "H7");
+  assert.equal(Array.from(result.edgeCodes).join(","), "H7,H7,H14,H2,H7");
 }
 
 function runMardColorMatchingRegression() {
