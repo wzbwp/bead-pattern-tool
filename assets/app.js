@@ -35,6 +35,10 @@ const KNOWN_COLOR_MATCHES = [
   {
     color: createColor("H2", "白色", { r: 255, g: 255, b: 255 }),
     maxDelta: 6
+  },
+  {
+    color: createColor("H7", "黑色", { r: 17, g: 17, b: 17 }),
+    maxDelta: 12
   }
 ];
 
@@ -1713,6 +1717,10 @@ function createColor(code, name, rgb) {
 }
 
 function findKnownColorMatch(rgb) {
+  if (isMardBlack(rgb)) {
+    return KNOWN_COLOR_MATCHES.find((entry) => entry.color.code === "H7").color;
+  }
+
   const hex = rgbToHex(rgb).toUpperCase();
   const exactMatch = KNOWN_COLOR_MATCHES.find((entry) => entry.color.hex.toUpperCase() === hex);
   if (exactMatch) {
@@ -1748,11 +1756,21 @@ function assignBeadColorCodes(colors) {
       return cloneColor(color);
     }
 
+    const knownColor = findKnownColorMatch(color.rgb);
+    if (knownColor) {
+      usedCodes.add(knownColor.code);
+      return {
+        ...cloneColor(color),
+        code: knownColor.code,
+        name: knownColor.name
+      };
+    }
+
     const sourceKey = getGeneratedColorKey(color);
     let code = generatedCodeMap.get(sourceKey);
 
     if (!code) {
-      code = getNextAvailableBeadCode(usedCodes);
+      code = getMardColorCode(color.rgb, usedCodes);
       generatedCodeMap.set(sourceKey, code);
       usedCodes.add(code);
     }
@@ -1773,19 +1791,98 @@ function getGeneratedColorKey(color) {
   return color.code || color.hex.toUpperCase();
 }
 
-function getNextAvailableBeadCode(usedCodes) {
-  const availableCode = BEAD_COLOR_CODES.find(
-    (code) => !usedCodes.has(code) && !RESERVED_MATCH_CODES.has(code)
-  );
+function getMardColorCode(rgb, usedCodes) {
+  const series = getMardColorSeries(rgb);
+  const count = COLOR_SERIES_COUNTS[series];
+  const preferredNumber = getMardPreferredNumber(rgb, series, count);
 
-  if (availableCode) {
-    return availableCode;
+  for (let offset = 0; offset < count; offset += 1) {
+    const number = ((preferredNumber - 1 + offset) % count) + 1;
+    const code = `${series}${number}`;
+    if (!usedCodes.has(code) && !RESERVED_MATCH_CODES.has(code)) {
+      return code;
+    }
   }
 
   return (
-    BEAD_COLOR_CODES.find((code) => !usedCodes.has(code)) ||
-    BEAD_COLOR_CODES[BEAD_COLOR_CODES.length - 1]
+    BEAD_COLOR_CODES.find(
+      (code) => !usedCodes.has(code) && !RESERVED_MATCH_CODES.has(code)
+    ) || BEAD_COLOR_CODES[BEAD_COLOR_CODES.length - 1]
   );
+}
+
+function getMardColorSeries(rgb) {
+  const hsl = rgbToHsl(rgb);
+  const hue = hsl.h * 360;
+
+  if (hsl.s <= 0.13) {
+    return "H";
+  }
+  if (hue >= 18 && hue < 72) {
+    return hsl.l < 0.44 && hsl.s < 0.68 ? "G" : "A";
+  }
+  if (hue >= 72 && hue < 172) {
+    return "B";
+  }
+  if (hue >= 172 && hue < 252) {
+    return "C";
+  }
+  if (hue >= 252 && hue < 302) {
+    return "D";
+  }
+  if (hue >= 302 && hue < 342) {
+    return "E";
+  }
+  return "F";
+}
+
+function getMardPreferredNumber(rgb, series, count) {
+  const hsl = rgbToHsl(rgb);
+  if (series === "H") {
+    return getMardNeutralNumber(hsl.l);
+  }
+
+  const huePosition = getSeriesHuePosition(hsl.h * 360, series);
+  const tone = clamp01((1 - hsl.l) * 0.55 + hsl.s * 0.3 + huePosition * 0.15);
+  return Math.max(1, Math.min(count, 1 + Math.round(tone * (count - 1))));
+}
+
+function getMardNeutralNumber(lightness) {
+  const neutralAnchors = [
+    { number: 2, lightness: 1 },
+    { number: 8, lightness: 0.94 },
+    { number: 1, lightness: 0.84 },
+    { number: 3, lightness: 0.68 },
+    { number: 4, lightness: 0.5 },
+    { number: 5, lightness: 0.36 },
+    { number: 6, lightness: 0.22 },
+    { number: 7, lightness: 0.07 }
+  ];
+
+  return neutralAnchors.reduce((best, anchor) =>
+    Math.abs(anchor.lightness - lightness) < Math.abs(best.lightness - lightness)
+      ? anchor
+      : best
+  ).number;
+}
+
+function getSeriesHuePosition(hue, series) {
+  const ranges = {
+    A: [18, 72],
+    B: [72, 172],
+    C: [172, 252],
+    D: [252, 302],
+    E: [302, 342],
+    F: [342, 378],
+    G: [18, 72]
+  };
+  const [start, end] = ranges[series] || [0, 360];
+  const normalizedHue = series === "F" && hue < 18 ? hue + 360 : hue;
+  return clamp01((normalizedHue - start) / Math.max(1, end - start));
+}
+
+function isMardBlack(rgb) {
+  return Math.max(rgb.r, rgb.g, rgb.b) <= 52 && getRgbLuminance(rgb) <= 0.17;
 }
 
 function getGeneratedColorName(code) {
