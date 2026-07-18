@@ -429,6 +429,47 @@ function runClassicSamplingRegression() {
   );
 }
 
+function runMardColorMatchingRegression() {
+  const app = loadApp();
+  const result = vm.runInContext(
+    `(() => {
+      const inputs = [
+        createColor("", "", { r: 236, g: 70, b: 84 }),
+        createColor("", "", { r: 18, g: 18, b: 18 }),
+        createColor("", "", { r: 235, g: 197, b: 45 }),
+        createColor("", "", { r: 42, g: 160, b: 88 }),
+        createColor("", "", { r: 46, g: 132, b: 202 }),
+        createColor("", "", { r: 116, g: 76, b: 174 }),
+        createColor("", "", { r: 220, g: 92, b: 164 }),
+        createColor("", "", { r: 126, g: 78, b: 45 }),
+        createColor("", "", { r: 132, g: 132, b: 132 }),
+        createColor("", "", { r: 255, g: 255, b: 255 })
+      ];
+      const assigned = assignBeadColorCodes(inputs);
+      const reordered = assignBeadColorCodes([...inputs].reverse());
+      return {
+        codes: assigned.map((color) => color.code),
+        reorderedBlack: reordered.find((color) => color.rgb.r === 18).code,
+        directBlack: createAutoColor({ r: 30, g: 30, b: 30 }, 0).code
+      };
+    })()`,
+    app
+  );
+
+  assert.equal(result.codes[0].startsWith("F"), true);
+  assert.equal(result.codes[1], "H7");
+  assert.equal(result.codes[2].startsWith("A"), true);
+  assert.equal(result.codes[3].startsWith("B"), true);
+  assert.equal(result.codes[4].startsWith("C"), true);
+  assert.equal(result.codes[5].startsWith("D"), true);
+  assert.equal(result.codes[6].startsWith("E"), true);
+  assert.equal(result.codes[7].startsWith("G"), true);
+  assert.equal(result.codes[8].startsWith("H"), true);
+  assert.equal(result.codes[9], "H2");
+  assert.equal(result.reorderedBlack, "H7");
+  assert.equal(result.directBlack, "H7");
+}
+
 function runSampledBoundaryPreservationRegression() {
   const app = loadApp();
   const result = vm.runInContext(
@@ -504,5 +545,6 @@ runSampledBoundaryPreservationRegression();
 runDefaultPaletteRegression();
 runAdaptivePaletteRegression();
 runClassicSamplingRegression();
+runMardColorMatchingRegression();
 runPreviewZoomRegression();
 console.log("Recognition regression tests passed.");
