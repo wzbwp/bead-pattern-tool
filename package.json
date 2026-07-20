@@ -5,6 +5,7 @@
   "description": "A static browser app that converts images into bead pattern color charts.",
   "scripts": {
     "dev": "python3 -m http.server 5173",
+    "icons": "node scripts/generate-pwa-icons.cjs",
     "build": "node -e \"console.log('Static app: no build step required.')\"",
     "test": "node tests/recognition.test.cjs"
   },

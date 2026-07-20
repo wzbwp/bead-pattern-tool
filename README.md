@@ -14,15 +14,17 @@
 - 统计每个色号需要的颗数
 - 导出自动带色号、长宽数字和底部所需颜色清单的 PNG 图纸
 - 导出 CSV 用色清单、JSON 原始数据
+- 支持 PWA 安装和离线打开应用壳
 
 ## 本地打开
 
-这个项目没有依赖，直接打开 `index.html` 即可使用。
+这个项目没有依赖，直接打开 `index.html` 即可使用核心功能。
 
-也可以在项目目录启动一个本地静态服务：
+如果需要验证 PWA 安装和离线缓存，需要通过 `localhost` 或 HTTPS 访问。可以在项目目录启动一个本地静态服务：
+
 
 ```bash
-python3 -m http.server 5173
+npm run dev
 ```
 
 然后访问：
@@ -30,6 +32,8 @@ python3 -m http.server 5173
 ```txt
 http://localhost:5173
 ```
+
+PWA 实现细节见 [docs/PWA.md](docs/PWA.md)。
 
 ## 部署到 Cloudflare Pages
 
@@ -92,13 +96,20 @@ https://bead-pattern-tool.vercel.app
 
 上述功能仅使用浏览器 Canvas API，没有新增运行时依赖，现有 GitHub Pages 静态发布流程无需调整。
 
+PWA 能力同样不需要新增依赖：`manifest.webmanifest` 提供安装元数据，根目录 `sw.js` 负责缓存首页、脚本、样式、色卡和图标资源。部署到 HTTPS 后，用户可以把工具安装到桌面或手机主屏；离线时可以继续打开应用并使用已经加载好的前端功能。
+
 ## 目录结构
 
 ```txt
 bead-pattern-tool/
   index.html
+  manifest.webmanifest
   package.json
+  sw.js
+  docs/
+    PWA.md
   assets/
     app.js
+    icons/
     styles.css
 ```
