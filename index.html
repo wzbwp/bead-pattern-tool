@@ -7,7 +7,14 @@
       name="description"
       content="纯前端拼豆图纸解析工具，上传图片后解析为拼豆色号和小色块图纸。"
     />
+    <meta name="theme-color" content="#0f8f86" />
+    <meta name="application-name" content="拼豆图纸解析工具" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="拼豆图纸" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>拼豆图纸解析工具</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
     <link rel="stylesheet" href="./assets/styles.css?v=mard-15" />
   </head>
   <body>
@@ -241,5 +248,12 @@
 
     <script src="./assets/mard-palette.js?v=mard-15" defer></script>
     <script src="./assets/app.js?v=mard-15" defer></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./sw.js").catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>
