@@ -10,7 +10,20 @@ const SAMPLE_MODES = [
 const MAX_SOURCE_SIDE = 1200;
 const PREVIEW_CELL_SIZE = 8;
 const EXPORT_CELL_SIZE = 18;
-const PAINT_COLORS = engine.getPaintColors();
+const EDITOR_TOOLS = [
+  { mode: "pan", label: "拖拽", icon: "✋" },
+  { mode: "paint", label: "画笔", icon: "✎" },
+  { mode: "erase", label: "橡皮", icon: "⌫" },
+  { mode: "eyedropper", label: "取色", icon: "⌖" },
+  { mode: "fill", label: "填充", icon: "▣" },
+  { mode: "line", label: "直线", icon: "╱" },
+  { mode: "rect", label: "矩形", icon: "□" },
+  { mode: "select", label: "选区", icon: "▢" }
+];
+const EDIT_MODE_LABELS = EDITOR_TOOLS.reduce((labels, item) => {
+  labels[item.mode] = item.label;
+  return labels;
+}, {});
 
 Page({
   data: {
@@ -36,17 +49,6 @@ Page({
     mirrorY: false,
     showGrid: true,
     showCodes: false,
-    manualEditMode: false,
-    eyedropperMode: false,
-    paintPaletteLabels: PAINT_COLORS.map((item) => `${item.code} · ${item.hex.toUpperCase()}`),
-    paintPaletteIndex: 0,
-    selectedPaintCode: PAINT_COLORS[0]?.code || "",
-    selectedPaintHex: PAINT_COLORS[0]?.hex?.toUpperCase() || "#FFFFFF",
-    selectedPaintLabel: PAINT_COLORS[0]
-      ? `${PAINT_COLORS[0].code} · ${PAINT_COLORS[0].hex.toUpperCase()}`
-      : "无可用色号",
-    paintStatus: "生成图纸后可手动改色",
-    canUndoPaint: false,
     canvasCssWidth: 446,
     canvasCssHeight: 446,
     stats: [],
@@ -55,7 +57,8 @@ Page({
     colorLimitLabel: "自动匹配颜色",
     averageDelta: "0.0",
     editMode: "paint",
-    editModeLabel: "涂色",
+    editModeLabel: "画笔",
+    editorTools: EDITOR_TOOLS,
     selectedColorCode: "",
     selectedColorHex: "",
     canUndo: false,
@@ -69,12 +72,11 @@ Page({
     this.patternCanvas = null;
     this.patternCtx = null;
     this.patternCanvasRect = null;
-    this.selectedPaintColor = PAINT_COLORS[0]
-      ? engine.getPaintColorByCode(PAINT_COLORS[0].code)
-      : null;
-    this.paintHistory = [];
+    this.editHistory = [];
+    this.currentStroke = null;
+    this.touchedCells = null;
     this.isPainting = false;
-    this.lastPaintedCell = "";
+    this.strokeStartCell = null;
     this.initCanvasNodes();
   },
 
@@ -194,6 +196,10 @@ Page({
         mirrorY: this.data.mirrorY
       });
       this.editHistory = [];
+      this.currentStroke = null;
+      this.touchedCells = null;
+      this.isPainting = false;
+      this.strokeStartCell = null;
       this.setData({
         hasResult: true,
         ...this.getPatternDisplayData(),
@@ -201,6 +207,8 @@ Page({
         colorLimitLabel: this.result.colorLimitLabel,
         averageDelta: this.result.averageDelta.toFixed(1),
         canUndo: false,
+        editMode: "paint",
+        editModeLabel: EDIT_MODE_LABELS.paint,
         statusText: "解析完成"
       });
       await this.drawPatternPreview();
@@ -258,6 +266,30 @@ Page({
     });
   },
 
+  drawPatternPreviewCell(x, y) {
+    if (!this.patternCtx || !this.result) return;
+    const cell = PREVIEW_CELL_SIZE;
+    const left = engine.RULER_SIZE + x * cell;
+    const top = engine.RULER_SIZE + y * cell;
+    const color = this.result.pattern[y][x];
+    this.patternCtx.fillStyle = color.hex;
+    this.patternCtx.fillRect(left, top, cell, cell);
+    if (this.data.showCodes && cell >= 13) {
+      this.patternCtx.fillStyle = engine.readableTextColor(color.rgb);
+      this.patternCtx.font = `${Math.max(8, Math.floor(cell * 0.34))}px sans-serif`;
+      this.patternCtx.textAlign = "center";
+      this.patternCtx.textBaseline = "middle";
+      this.patternCtx.fillText(color.code, left + cell / 2, top + cell / 2);
+    }
+    if (this.data.showGrid) {
+      this.patternCtx.save();
+      this.patternCtx.strokeStyle = "rgba(28,37,41,.18)";
+      this.patternCtx.lineWidth = 1;
+      this.patternCtx.strokeRect(left + 0.5, top + 0.5, cell, cell);
+      this.patternCtx.restore();
+    }
+  },
+
   getPatternDisplayData() {
     const stats = buildPatternStats(this.result.pattern);
     const statsByCode = new Map(stats.map((item) => [item.code, item.count]));
@@ -283,67 +315,49 @@ Page({
     if (!item || !item.code) return;
     this.setData({
       editMode: "paint",
-      editModeLabel: "涂色",
+      editModeLabel: EDIT_MODE_LABELS.paint,
       selectedColorCode: item.code,
       selectedColorHex: String(item.hex || "").toUpperCase()
     });
   },
 
-  toggleEyedropper() {
-    const isEyedropper = this.data.editMode === "eyedropper";
+  setEditMode(event) {
+    const mode = event.currentTarget.dataset.mode;
+    if (!EDITOR_TOOLS.some((item) => item.mode === mode)) return;
     this.setData({
-      editMode: isEyedropper ? "paint" : "eyedropper",
-      editModeLabel: isEyedropper ? "涂色" : "取色"
+      editMode: mode,
+      editModeLabel: EDIT_MODE_LABELS[mode] || "编辑"
     });
   },
 
   undoEdit() {
     if (!this.result || !this.editHistory || !this.editHistory.length) return;
-    this.result.pattern = this.editHistory.pop();
+    const stroke = this.editHistory.pop();
+    stroke.forEach((change) => {
+      this.result.pattern[change.y][change.x] = cloneColor(change.before);
+      this.drawPatternPreviewCell(change.x, change.y);
+    });
     this.setData({
       ...this.getPatternDisplayData(),
       canUndo: this.editHistory.length > 0
     });
-    this.drawPatternPreview();
   },
 
   onPatternTouchStart(event) {
     if (!this.result) return;
+    if (this.data.editMode === "pan" || this.data.editMode === "select") return;
+    const cell = this.getCellFromTouch(event);
+    if (!cell) return;
     this.isPainting = true;
-    this.strokeChanged = false;
-    if (this.data.editMode === "paint") {
-      this.editHistory.push(clonePattern(this.result.pattern));
-      this.setData({ canUndo: true });
-    }
-    this.paintAtTouch(event);
-  },
+    this.currentStroke = [];
+    this.touchedCells = new Set();
+    this.strokeStartCell = cell;
 
-  onPatternTouchMove(event) {
-    if (!this.isPainting) return;
-    this.paintAtTouch(event);
-  },
-
-  onPatternTouchEnd() {
-    this.isPainting = false;
-    if (!this.strokeChanged && this.data.editMode === "paint") {
-      this.editHistory.pop();
-      this.setData({ canUndo: this.editHistory.length > 0 });
-    }
-  },
-
-  paintAtTouch(event) {
-    const point = getTouchPoint(event, this.patternCanvas);
-    if (!point) return;
-    const cellSize = PREVIEW_CELL_SIZE;
-    const x = Math.floor((point.x - engine.RULER_SIZE) / cellSize);
-    const y = Math.floor((point.y - engine.RULER_SIZE) / cellSize);
-    if (x < 0 || y < 0 || x >= this.result.gridWidth || y >= this.result.gridHeight) return;
-
-    const current = this.result.pattern[y][x];
     if (this.data.editMode === "eyedropper") {
+      const current = this.result.pattern[cell.y][cell.x];
       this.setData({
         editMode: "paint",
-        editModeLabel: "涂色",
+        editModeLabel: EDIT_MODE_LABELS.paint,
         selectedColorCode: current.code,
         selectedColorHex: current.hex.toUpperCase()
       });
@@ -351,13 +365,114 @@ Page({
       return;
     }
 
-    if (!this.data.selectedColorCode || current.code === this.data.selectedColorCode) return;
-    const paletteColor = (this.result.palette || []).find((item) => item.code === this.data.selectedColorCode);
-    if (!paletteColor) return;
-    this.result.pattern[y][x] = { ...paletteColor, rgb: { ...paletteColor.rgb }, lab: { ...paletteColor.lab } };
-    this.strokeChanged = true;
-    this.setData(this.getPatternDisplayData());
-    this.drawPatternPreview();
+    if (this.data.editMode === "fill") {
+      this.fillFromCell(cell.x, cell.y);
+      this.finishStroke();
+      return;
+    }
+
+    if (this.data.editMode === "paint" || this.data.editMode === "erase") {
+      this.paintCell(cell.x, cell.y, this.getActiveToolColor());
+    }
+  },
+
+  onPatternTouchMove(event) {
+    if (!this.isPainting) return;
+    const mode = this.data.editMode;
+    if (mode !== "paint" && mode !== "erase") return;
+    const cell = this.getCellFromTouch(event);
+    if (!cell) return;
+    this.paintCell(cell.x, cell.y, this.getActiveToolColor());
+  },
+
+  onPatternTouchEnd(event) {
+    if (!this.isPainting) return;
+    const mode = this.data.editMode;
+    const endCell = this.getCellFromTouch(event) || this.strokeStartCell;
+    if ((mode === "line" || mode === "rect") && this.strokeStartCell && endCell) {
+      const cells = mode === "line"
+        ? getLineCells(this.strokeStartCell, endCell)
+        : getRectCells(this.strokeStartCell, endCell);
+      const color = this.getActiveToolColor();
+      cells.forEach((cell) => this.paintCell(cell.x, cell.y, color));
+    }
+    this.finishStroke();
+  },
+
+  finishStroke() {
+    this.isPainting = false;
+    this.strokeStartCell = null;
+    this.touchedCells = null;
+    if (this.currentStroke && this.currentStroke.length) {
+      this.editHistory.push(this.currentStroke);
+      if (this.editHistory.length > 80) this.editHistory.shift();
+      this.currentStroke = null;
+      this.setData({
+        ...this.getPatternDisplayData(),
+        canUndo: this.editHistory.length > 0
+      });
+      return;
+    }
+    this.currentStroke = null;
+  },
+
+  getCellFromTouch(event) {
+    const point = getTouchPoint(event, this.patternCanvas);
+    if (!point || !this.result) return null;
+    const cellSize = PREVIEW_CELL_SIZE;
+    const x = Math.floor((point.x - engine.RULER_SIZE) / cellSize);
+    const y = Math.floor((point.y - engine.RULER_SIZE) / cellSize);
+    if (x < 0 || y < 0 || x >= this.result.gridWidth || y >= this.result.gridHeight) return null;
+    return { x, y };
+  },
+
+  paintCell(x, y, color) {
+    if (!color || !this.result) return false;
+    const current = this.result.pattern[y][x];
+    if (current.code === color.code) return false;
+    const key = `${x}:${y}`;
+    if (!this.touchedCells) this.touchedCells = new Set();
+    if (!this.touchedCells.has(key)) {
+      this.currentStroke.push({ x, y, before: cloneColor(current) });
+      this.touchedCells.add(key);
+    }
+    this.result.pattern[y][x] = cloneColor(color);
+    this.drawPatternPreviewCell(x, y);
+    return true;
+  },
+
+  getActiveToolColor() {
+    if (this.data.editMode === "erase") {
+      return engine.getPaintColorByCode("H2") || { code: "H2", hex: "#FFFFFF", rgb: { r: 255, g: 255, b: 255 } };
+    }
+    if (!this.data.selectedColorCode) return null;
+    return getColorByCode(this.data.selectedColorCode, this.result);
+  },
+
+  fillFromCell(x, y) {
+    const color = this.getActiveToolColor();
+    if (!color) return;
+    const targetCode = this.result.pattern[y][x].code;
+    if (targetCode === color.code) return;
+    const queue = [{ x, y }];
+    const visited = new Set([`${x}:${y}`]);
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const cell = queue[cursor];
+      if (this.result.pattern[cell.y][cell.x].code !== targetCode) continue;
+      this.paintCell(cell.x, cell.y, color);
+      [
+        { x: cell.x - 1, y: cell.y },
+        { x: cell.x + 1, y: cell.y },
+        { x: cell.x, y: cell.y - 1 },
+        { x: cell.x, y: cell.y + 1 }
+      ].forEach((next) => {
+        if (next.x < 0 || next.y < 0 || next.x >= this.result.gridWidth || next.y >= this.result.gridHeight) return;
+        const key = `${next.x}:${next.y}`;
+        if (visited.has(key)) return;
+        visited.add(key);
+        queue.push(next);
+      });
+    }
   },
 
   async ensurePatternCanvas() {
@@ -447,12 +562,60 @@ function getFileName(path) {
   return parts[parts.length - 1] || "未命名图片";
 }
 
-function clonePattern(pattern) {
-  return pattern.map((row) => row.map((color) => ({
+function cloneColor(color) {
+  return {
     ...color,
     rgb: color.rgb ? { ...color.rgb } : color.rgb,
     lab: color.lab ? { ...color.lab } : color.lab
-  })));
+  };
+}
+
+function getColorByCode(code, result) {
+  const paletteColor = (result.palette || []).find((item) => item.code === code);
+  const paintColor = engine.getPaintColorByCode(code);
+  return paletteColor ? cloneColor(paletteColor) : paintColor;
+}
+
+function getLineCells(from, to) {
+  const cells = [];
+  let x0 = from.x;
+  let y0 = from.y;
+  const x1 = to.x;
+  const y1 = to.y;
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let error = dx - dy;
+
+  while (true) {
+    cells.push({ x: x0, y: y0 });
+    if (x0 === x1 && y0 === y1) break;
+    const doubled = error * 2;
+    if (doubled > -dy) {
+      error -= dy;
+      x0 += sx;
+    }
+    if (doubled < dx) {
+      error += dx;
+      y0 += sy;
+    }
+  }
+  return cells;
+}
+
+function getRectCells(from, to) {
+  const cells = [];
+  const minX = Math.min(from.x, to.x);
+  const maxX = Math.max(from.x, to.x);
+  const minY = Math.min(from.y, to.y);
+  const maxY = Math.max(from.y, to.y);
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      cells.push({ x, y });
+    }
+  }
+  return cells;
 }
 
 function buildPatternStats(pattern) {
@@ -473,7 +636,7 @@ function buildPatternStats(pattern) {
 }
 
 function getTouchPoint(event, canvas) {
-  const touch = event && event.touches && event.touches[0];
+  const touch = event && ((event.touches && event.touches[0]) || (event.changedTouches && event.changedTouches[0]));
   if (!touch) return null;
   if (Number.isFinite(touch.x) && Number.isFinite(touch.y)) {
     return { x: touch.x, y: touch.y };

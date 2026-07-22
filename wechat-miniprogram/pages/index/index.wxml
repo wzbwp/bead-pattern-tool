@@ -66,15 +66,17 @@
       </view>
     </view>
     <view class="edit-toolbar" wx:if="{{hasResult}}">
-      <button class="tool-button {{editMode === 'eyedropper' ? 'active' : ''}}" bindtap="toggleEyedropper">{{editMode === 'eyedropper' ? '退出取色' : '取色'}}</button>
+      <button wx:for="{{editorTools}}" wx:key="mode" class="tool-button {{editMode === item.mode ? 'active' : ''}}" data-mode="{{item.mode}}" bindtap="setEditMode">
+        <text class="tool-icon">{{item.icon}}</text>
+        <text>{{item.label}}</text>
+      </button>
       <view class="selected-color">
         <view class="selected-swatch" style="background: {{selectedColorHex}};"></view>
         <text>{{editModeLabel}} {{selectedColorCode || '未选择颜色'}}</text>
       </view>
-      <text class="edit-tip">点击或拖动格子修改颜色</text>
     </view>
     <scroll-view class="canvas-scroll" scroll-x scroll-y>
-      <canvas type="2d" id="patternCanvas" class="pattern-canvas" catchtouchstart="onPatternTouchStart" catchtouchmove="onPatternTouchMove" catchtouchend="onPatternTouchEnd" catchtouchcancel="onPatternTouchEnd" style="width: {{canvasCssWidth}}px; height: {{canvasCssHeight}}px;"></canvas>
+      <canvas type="2d" id="patternCanvas" class="pattern-canvas" bindtouchstart="onPatternTouchStart" bindtouchmove="onPatternTouchMove" bindtouchend="onPatternTouchEnd" bindtouchcancel="onPatternTouchEnd" style="width: {{canvasCssWidth}}px; height: {{canvasCssHeight}}px;"></canvas>
       <view class="empty-state" wx:if="{{!hasResult}}">
         <text>选择图片后生成图纸</text>
       </view>
