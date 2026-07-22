@@ -135,6 +135,23 @@
           </section>
 
           <section class="panel-section">
+            <div class="section-title">手动改色</div>
+            <label class="check-row">
+              <input id="manualEditMode" type="checkbox" disabled />
+              <span>启用画布改色</span>
+            </label>
+            <label class="field">
+              <span>画笔色号</span>
+              <select id="paintColorSelect" disabled></select>
+            </label>
+            <div class="paint-toolbar">
+              <button class="button" id="eyedropperMode" type="button" disabled>吸管</button>
+              <button class="button" id="undoPaint" type="button" disabled>撤销</button>
+            </div>
+            <div class="paint-status" id="paintStatus">生成图纸后可手动改色</div>
+          </section>
+
+          <section class="panel-section">
             <div class="section-title">导出</div>
             <div class="button-grid">
               <button class="button primary" id="exportPng" type="button" disabled>PNG</button>
