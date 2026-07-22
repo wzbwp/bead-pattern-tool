@@ -152,6 +152,12 @@ const state = {
   exportPreviewUrl: "",
   showGrid: true,
   showCodes: false,
+  manualEditMode: false,
+  eyedropperMode: false,
+  selectedPaintColor: null,
+  paintHistory: [],
+  isPainting: false,
+  lastPaintedCell: "",
   activeColorLimit: 8,
   averageDelta: 0
 };
@@ -199,6 +205,11 @@ const els = {
   zoomValue: document.querySelector("#zoomValue"),
   showGrid: document.querySelector("#showGrid"),
   showCodes: document.querySelector("#showCodes"),
+  manualEditMode: document.querySelector("#manualEditMode"),
+  paintColorSelect: document.querySelector("#paintColorSelect"),
+  eyedropperMode: document.querySelector("#eyedropperMode"),
+  undoPaint: document.querySelector("#undoPaint"),
+  paintStatus: document.querySelector("#paintStatus"),
   patternCanvas: document.querySelector("#patternCanvas"),
   canvasStage: document.querySelector("#canvasStage"),
   resultTitle: document.querySelector("#resultTitle"),
@@ -215,6 +226,7 @@ const ctx = els.patternCanvas.getContext("2d");
 let parseTimer = 0;
 
 renderPackageOptions();
+renderPaintColorOptions();
 bindEvents();
 drawEmptyCanvas();
 updateBoardMeta();
@@ -229,6 +241,23 @@ function renderPackageOptions() {
     `
   ).join("");
   selectColorPackage(state.colorPackage);
+}
+
+function renderPaintColorOptions() {
+  if (!els.paintColorSelect) {
+    return;
+  }
+
+  const colors = MARD_COLOR_PALETTE.length ? MARD_COLOR_PALETTE : KNOWN_COLOR_MATCHES.map((entry) => entry.color);
+  els.paintColorSelect.innerHTML = colors.map((color) => {
+    const label = `${color.code} · ${color.hex.toUpperCase()}`;
+    return `<option value="${color.code}">${label}</option>`;
+  }).join("");
+  if (colors.length) {
+    state.selectedPaintColor = cloneColor(colors[0]);
+    els.paintColorSelect.value = colors[0].code;
+  }
+  updatePaintControls();
 }
 
 function bindEvents() {
@@ -379,6 +408,31 @@ function bindEvents() {
     drawPattern();
   });
 
+  els.manualEditMode.addEventListener("change", () => {
+    state.manualEditMode = els.manualEditMode.checked;
+    state.eyedropperMode = false;
+    updatePaintControls();
+  });
+
+  els.paintColorSelect.addEventListener("change", () => {
+    selectPaintColorByCode(els.paintColorSelect.value);
+  });
+
+  els.eyedropperMode.addEventListener("click", () => {
+    if (!state.pattern.length || !state.manualEditMode) {
+      return;
+    }
+    state.eyedropperMode = !state.eyedropperMode;
+    updatePaintControls();
+  });
+
+  els.undoPaint.addEventListener("click", undoPaintChange);
+  els.paletteList.addEventListener("click", selectPaintColorFromElement);
+  els.requiredList.addEventListener("click", selectPaintColorFromElement);
+  els.paletteList.addEventListener("keydown", selectPaintColorFromKeyboard);
+  els.requiredList.addEventListener("keydown", selectPaintColorFromKeyboard);
+  bindPatternCanvasEditing();
+
   els.exportPng.addEventListener("click", exportPng);
   els.exportCsv.addEventListener("click", exportCsv);
   els.exportJson.addEventListener("click", exportJson);
@@ -388,6 +442,202 @@ function bindEvents() {
       drawEmptyCanvas();
     }
   });
+}
+
+function bindPatternCanvasEditing() {
+  els.patternCanvas.addEventListener("pointerdown", (event) => {
+    if (!state.manualEditMode || !state.pattern.length) {
+      return;
+    }
+
+    event.preventDefault();
+    state.isPainting = true;
+    state.lastPaintedCell = "";
+    els.patternCanvas.setPointerCapture?.(event.pointerId);
+    applyCanvasEdit(event);
+  });
+
+  els.patternCanvas.addEventListener("pointermove", (event) => {
+    if (!state.isPainting || !state.manualEditMode || !state.pattern.length) {
+      return;
+    }
+
+    event.preventDefault();
+    applyCanvasEdit(event);
+  });
+
+  ["pointerup", "pointercancel", "pointerleave"].forEach((eventName) => {
+    els.patternCanvas.addEventListener(eventName, (event) => {
+      state.isPainting = false;
+      state.lastPaintedCell = "";
+      els.patternCanvas.releasePointerCapture?.(event.pointerId);
+    });
+  });
+}
+
+function applyCanvasEdit(event) {
+  const cell = getCanvasCellFromPointer(event);
+  if (!cell) {
+    return;
+  }
+
+  const cellKey = `${cell.x}:${cell.y}`;
+  if (cellKey === state.lastPaintedCell) {
+    return;
+  }
+  state.lastPaintedCell = cellKey;
+
+  if (state.eyedropperMode) {
+    const pickedColor = state.pattern[cell.y]?.[cell.x];
+    if (pickedColor) {
+      selectPaintColor(pickedColor, true);
+      state.eyedropperMode = false;
+      updatePaintControls();
+    }
+    return;
+  }
+
+  paintPatternCell(cell.x, cell.y, state.selectedPaintColor);
+}
+
+function getCanvasCellFromPointer(event) {
+  const rect = els.patternCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+
+  const cssWidth = parseFloat(els.patternCanvas.style.width) || rect.width;
+  const cssHeight = parseFloat(els.patternCanvas.style.height) || rect.height;
+  const x = (event.clientX - rect.left) * (cssWidth / rect.width);
+  const y = (event.clientY - rect.top) * (cssHeight / rect.height);
+  const patternX = x - RULER_SIZE;
+  const patternY = y - RULER_SIZE;
+
+  if (patternX < 0 || patternY < 0) {
+    return null;
+  }
+
+  const gridX = Math.floor(patternX / state.cellSize);
+  const gridY = Math.floor(patternY / state.cellSize);
+  if (gridX < 0 || gridX >= state.gridWidth || gridY < 0 || gridY >= state.gridHeight) {
+    return null;
+  }
+
+  return { x: gridX, y: gridY };
+}
+
+function paintPatternCell(x, y, color) {
+  if (!color || !state.pattern[y]?.[x]) {
+    return;
+  }
+
+  const previous = state.pattern[y][x];
+  if (previous.code === color.code && previous.hex.toUpperCase() === color.hex.toUpperCase()) {
+    return;
+  }
+
+  const next = cloneColor(color);
+  state.paintHistory.push({
+    x,
+    y,
+    previous: cloneColor(previous),
+    next: cloneColor(next)
+  });
+  if (state.paintHistory.length > 120) {
+    state.paintHistory.shift();
+  }
+
+  state.pattern[y][x] = next;
+  refreshPatternAfterManualEdit(`已将第 ${y + 1} 行，第 ${x + 1} 列改为 ${getDisplayCode(next)}`);
+}
+
+function undoPaintChange() {
+  const change = state.paintHistory.pop();
+  if (!change) {
+    return;
+  }
+
+  if (state.pattern[change.y]?.[change.x]) {
+    state.pattern[change.y][change.x] = cloneColor(change.previous);
+    refreshPatternAfterManualEdit("已撤销上一步改色");
+  }
+}
+
+function refreshPatternAfterManualEdit(message) {
+  const colors = state.pattern.flat();
+  state.stats = buildStats(colors);
+  drawPattern();
+  renderStats();
+  enableExports(true);
+  setStatus("手动改色已应用", true);
+  if (message) {
+    els.paintStatus.textContent = message;
+  }
+  updatePaintControls();
+}
+
+function selectPaintColorFromElement(event) {
+  const button = event.target.closest("[data-paint-code]");
+  if (!button) {
+    return;
+  }
+
+  selectPaintColorByCode(button.dataset.paintCode, true);
+}
+
+function selectPaintColorFromKeyboard(event) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
+  selectPaintColorFromElement(event);
+}
+
+function selectPaintColorByCode(code, enableManualMode = false) {
+  const color =
+    MARD_COLOR_BY_CODE.get(code) ||
+    state.stats.find((item) => item.code === code) ||
+    state.activePalette.find((item) => item.code === code);
+  if (!color) {
+    return;
+  }
+
+  selectPaintColor(color, enableManualMode);
+}
+
+function selectPaintColor(color, enableManualMode = false) {
+  state.selectedPaintColor = cloneColor(color);
+  if (els.paintColorSelect.querySelector(`option[value="${color.code}"]`)) {
+    els.paintColorSelect.value = color.code;
+  }
+  if (enableManualMode && state.pattern.length) {
+    state.manualEditMode = true;
+    els.manualEditMode.checked = true;
+  }
+  els.paintStatus.textContent = `当前画笔：${getDisplayCode(color)} · ${color.hex.toUpperCase()}`;
+  updatePaintControls();
+}
+
+function updatePaintControls() {
+  const hasPattern = Boolean(state.pattern.length);
+  els.manualEditMode.disabled = !hasPattern;
+  els.paintColorSelect.disabled = !hasPattern || !state.manualEditMode;
+  els.eyedropperMode.disabled = !hasPattern || !state.manualEditMode;
+  els.undoPaint.disabled = !state.paintHistory.length;
+  els.eyedropperMode.classList.toggle("active", state.eyedropperMode);
+  els.patternCanvas.classList.toggle("paint-enabled", hasPattern && state.manualEditMode);
+  els.canvasStage.classList.toggle("paint-enabled", hasPattern && state.manualEditMode);
+
+  if (!hasPattern) {
+    els.manualEditMode.checked = false;
+    state.manualEditMode = false;
+    state.eyedropperMode = false;
+    els.paintStatus.textContent = "生成图纸后可手动改色";
+  } else if (!state.manualEditMode) {
+    els.paintStatus.textContent = state.selectedPaintColor
+      ? `开启后使用 ${getDisplayCode(state.selectedPaintColor)} 改色`
+      : "开启后点击画布改色";
+  }
 }
 
 function loadFile(file) {
@@ -771,9 +1021,17 @@ function parseImage() {
   state.stats = buildStats(outputColors);
   state.activePalette = mapped.palette;
   state.averageDelta = mapped.averageDelta;
+  state.paintHistory = [];
+  state.isPainting = false;
+  state.lastPaintedCell = "";
 
   drawPattern();
   renderStats();
+  if (!state.selectedPaintColor || !state.stats.some((item) => item.code === state.selectedPaintColor.code)) {
+    selectPaintColor(state.stats[0] || MARD_COLOR_PALETTE[0] || KNOWN_COLOR_MATCHES[0].color);
+  } else {
+    updatePaintControls();
+  }
   setStatus("解析完成", true);
   enableExports(true);
 }
@@ -2122,6 +2380,10 @@ function renderStats() {
       </div>
       <div class="color-count"><strong>${item.count}</strong><span>颗</span></div>
     `;
+    row.dataset.paintCode = item.code;
+    row.title = `设为画笔：${item.code}`;
+    row.role = "button";
+    row.tabIndex = 0;
     fragment.appendChild(row);
   });
   els.paletteList.appendChild(fragment);
@@ -2140,6 +2402,9 @@ function renderRequiredColors(totalCount) {
     chip.style.color = readableTextColor(item.rgb);
     chip.title = `${item.code} · ${item.name} · ${item.count}`;
     chip.innerHTML = `<strong>${getDisplayCode(item)}</strong><span>${item.count}</span>`;
+    chip.dataset.paintCode = item.code;
+    chip.role = "button";
+    chip.tabIndex = 0;
     fragment.appendChild(chip);
   });
 

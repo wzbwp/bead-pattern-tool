@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bead-pattern-tool-pwa-v1";
+const CACHE_VERSION = "bead-pattern-tool-pwa-v2";
 const APP_SHELL = [
   "./",
   "./index.html",

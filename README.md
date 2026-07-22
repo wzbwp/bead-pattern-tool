@@ -10,6 +10,7 @@
 - 上传图片可手动缩放和上下左右移动后重新采样
 - 支持默认配色方案和 A-M 全色号/72/48/24/12/8/6 色上限
 - 生成带长宽数字和 5 x 5 高亮网格的小色块图纸预览
+- 图纸生成后可在画布上手动修改单颗豆子的颜色，并同步刷新用色统计和导出结果
 - 自动统一相近轮廓色，并补齐轻微断开的外轮廓
 - 统计每个色号需要的颗数
 - 导出自动带色号、长宽数字和底部所需颜色清单的 PNG 图纸
@@ -33,7 +34,13 @@ npm run dev
 http://localhost:5173
 ```
 
-PWA 实现细节见 [docs/PWA.md](docs/PWA.md)。
+PWA 实现细节见 [docs/PWA.md](docs/PWA.md)。自定义域名配置见 [docs/CUSTOM_DOMAIN.md](docs/CUSTOM_DOMAIN.md)。后端工程基础整理见 [docs/BACKEND_FOUNDATIONS.md](docs/BACKEND_FOUNDATIONS.md)。
+
+## 微信小程序
+
+仓库内包含一个原生微信小程序工程，位于 `wechat-miniprogram/`。可以用微信开发者工具直接导入该目录，替换 `project.config.json` 里的 `appid` 后进行预览、上传和发布。
+
+小程序发布步骤和当前功能范围见 [wechat-miniprogram/README.md](wechat-miniprogram/README.md)。
 
 ## 部署到 Cloudflare Pages
 

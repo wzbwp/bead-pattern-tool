@@ -26,6 +26,7 @@ jobs:
           cp index.html manifest.webmanifest package.json README.md sw.js /tmp/bead-pattern-site/
           cp -R assets /tmp/bead-pattern-site/assets
           cp -R docs /tmp/bead-pattern-site/docs
+          if [ -f CNAME ]; then cp CNAME /tmp/bead-pattern-site/CNAME; fi
           touch /tmp/bead-pattern-site/.nojekyll
 
       - name: Publish to gh-pages

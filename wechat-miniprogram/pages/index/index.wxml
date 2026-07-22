@@ -1,0 +1,99 @@
+<view class="page">
+  <view class="topbar">
+    <view>
+      <text class="eyebrow">Bead Pattern</text>
+      <text class="title">拼豆图纸解析</text>
+    </view>
+    <text class="status {{hasResult ? 'ready' : ''}}">{{statusText}}</text>
+  </view>
+
+  <view class="panel upload-panel">
+    <button class="primary-button" bindtap="chooseImage">选择图片</button>
+    <view class="image-meta" wx:if="{{imagePath}}">
+      <image class="source-preview" src="{{imagePath}}" mode="aspectFill" />
+      <view>
+        <text class="meta-title">{{imageName}}</text>
+        <text class="meta-sub">{{imageWidth}} x {{imageHeight}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="panel config-panel">
+    <view class="row-title">图纸尺寸</view>
+    <view class="preset-row">
+      <button wx:for="{{presets}}" wx:key="size" class="preset {{gridWidth === item.size && gridHeight === item.size ? 'active' : ''}}" data-size="{{item.size}}" bindtap="setPreset">{{item.label}}</button>
+    </view>
+    <view class="field-grid">
+      <label class="field">
+        <text>宽度</text>
+        <input type="number" value="{{gridWidth}}" data-key="gridWidth" bindinput="onNumberInput" />
+      </label>
+      <label class="field">
+        <text>高度</text>
+        <input type="number" value="{{gridHeight}}" data-key="gridHeight" bindinput="onNumberInput" />
+      </label>
+    </view>
+
+    <view class="row-title">采样方式</view>
+    <picker range="{{sampleModeLabels}}" value="{{sampleModeIndex}}" bindchange="onSampleModeChange">
+      <view class="picker-value">{{sampleModeLabels[sampleModeIndex]}}</view>
+    </picker>
+
+    <view class="row-title">颜色上限</view>
+    <picker range="{{packageLabels}}" value="{{packageIndex}}" bindchange="onPackageChange">
+      <view class="picker-value">{{packageLabels[packageIndex]}}</view>
+    </picker>
+
+    <view class="switch-grid">
+      <label class="switch-row"><switch checked="{{mirrorX}}" data-key="mirrorX" bindchange="onSwitchChange" color="#0f8f86" />水平镜像</label>
+      <label class="switch-row"><switch checked="{{mirrorY}}" data-key="mirrorY" bindchange="onSwitchChange" color="#0f8f86" />垂直镜像</label>
+      <label class="switch-row"><switch checked="{{showGrid}}" data-key="showGrid" bindchange="onSwitchChange" color="#0f8f86" />网格线</label>
+      <label class="switch-row"><switch checked="{{showCodes}}" data-key="showCodes" bindchange="onSwitchChange" color="#0f8f86" />显示色号</label>
+    </view>
+
+    <button class="primary-button" disabled="{{!imagePath || parsing}}" bindtap="parseCurrentImage">{{parsing ? '解析中...' : '生成图纸'}}</button>
+  </view>
+
+  <view class="panel result-panel">
+    <view class="result-header">
+      <view>
+        <text class="row-title">图纸预览</text>
+        <text class="meta-sub" wx:if="{{hasResult}}">{{statsCount}} 色 · {{totalCells}} 颗 · {{colorLimitLabel}} · ΔE {{averageDelta}}</text>
+      </view>
+      <view class="result-actions">
+        <button class="plain-button" disabled="{{!canUndo}}" bindtap="undoEdit">撤销</button>
+        <button class="plain-button" disabled="{{!hasResult}}" bindtap="savePattern">保存 PNG</button>
+      </view>
+    </view>
+    <view class="edit-toolbar" wx:if="{{hasResult}}">
+      <button class="tool-button {{editMode === 'eyedropper' ? 'active' : ''}}" bindtap="toggleEyedropper">{{editMode === 'eyedropper' ? '退出取色' : '取色'}}</button>
+      <view class="selected-color">
+        <view class="selected-swatch" style="background: {{selectedColorHex}};"></view>
+        <text>{{editModeLabel}} {{selectedColorCode || '未选择颜色'}}</text>
+      </view>
+      <text class="edit-tip">点击或拖动格子修改颜色</text>
+    </view>
+    <scroll-view class="canvas-scroll" scroll-x scroll-y>
+      <canvas type="2d" id="patternCanvas" class="pattern-canvas" catchtouchstart="onPatternTouchStart" catchtouchmove="onPatternTouchMove" catchtouchend="onPatternTouchEnd" catchtouchcancel="onPatternTouchEnd" style="width: {{canvasCssWidth}}px; height: {{canvasCssHeight}}px;"></canvas>
+      <view class="empty-state" wx:if="{{!hasResult}}">
+        <text>选择图片后生成图纸</text>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view class="panel palette-panel" wx:if="{{hasResult}}">
+    <view class="row-title">颜色选择</view>
+    <view class="palette-list">
+      <view wx:for="{{paletteItems}}" wx:key="code" class="color-item {{selectedColorCode === item.code ? 'selected' : ''}}" data-code="{{item.code}}" data-hex="{{item.hex}}" bindtap="selectPaletteColor">
+        <view class="swatch" style="background: {{item.hex}};"></view>
+        <view class="color-info">
+          <text class="color-code">{{item.code}}</text>
+          <text class="meta-sub">{{item.hex}}</text>
+        </view>
+        <text class="count">{{item.count}} 颗</text>
+      </view>
+    </view>
+  </view>
+
+  <canvas type="2d" id="sourceCanvas" class="hidden-canvas"></canvas>
+</view>

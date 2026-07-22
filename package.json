@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "python3 -m http.server 5173",
     "icons": "node scripts/generate-pwa-icons.cjs",
+    "miniprogram:palette": "node scripts/generate-miniprogram-palette.cjs",
     "build": "node -e \"console.log('Static app: no build step required.')\"",
-    "test": "node tests/recognition.test.cjs"
+    "test": "node tests/recognition.test.cjs && node tests/miniprogram-engine.test.cjs"
   },
   "keywords": [
     "beads",
