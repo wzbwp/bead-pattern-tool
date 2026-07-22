@@ -221,6 +221,24 @@
             <span class="editor-hint">拖动框选区域，框外可平移图片</span>
           </div>
           <aside class="image-editor-controls" aria-label="图片编辑工具">
+            <div class="editor-tool-grid image-paint-tools" id="imageEditorTools">
+              <button class="tool-button active" type="button" data-tool="move">✋<span>拖拽</span></button>
+              <button class="tool-button" type="button" data-tool="brush">✒<span>画笔</span></button>
+              <button class="tool-button" type="button" data-tool="eraser">⌫<span>橡皮</span></button>
+              <button class="tool-button" type="button" data-tool="eyedropper">⌖<span>取色</span></button>
+              <button class="tool-button" type="button" data-tool="fill">▣<span>填充</span></button>
+              <button class="tool-button" type="button" data-tool="line">╱<span>直线</span></button>
+              <button class="tool-button" type="button" data-tool="rect">□<span>矩形</span></button>
+              <button class="tool-button" type="button" data-tool="select">▢<span>选区</span></button>
+            </div>
+            <label class="editor-color-field">
+              <span>画笔颜色</span>
+              <input id="imageEditorColor" type="color" value="#0f8f86" />
+            </label>
+            <label class="editor-range">
+              <span>笔刷大小</span>
+              <input id="imageEditorBrushSize" type="range" min="1" max="64" value="16" />
+            </label>
             <div class="editor-tool-grid">
               <button class="tool-button" id="rotateImage" type="button">↻<span>旋转</span></button>
               <button class="tool-button" id="flipImageX" type="button">↔<span>水平翻转</span></button>
@@ -234,6 +252,7 @@
             <button class="button background-button" id="removeImageBackground" type="button">
               一键去除背景
             </button>
+            <button class="button" id="undoImageEdit" type="button" disabled>撤销图片编辑</button>
             <span class="editor-status" id="imageEditorStatus">保留主体颜色，去除与边缘连通的背景</span>
           </aside>
         </div>

@@ -146,7 +146,16 @@ const state = {
     dragging: false,
     dragMode: "pan",
     dragStart: null,
-    cropStart: null
+    cropStart: null,
+    tool: "move",
+    drawColor: "#0f8f86",
+    brushSize: 16,
+    imageEditHistory: [],
+    strokeCanvas: null,
+    strokeContext: null,
+    strokeStart: null,
+    lastImagePoint: null,
+    strokeChanged: false
   },
   exportPreviewCanvas: null,
   exportPreviewUrl: "",
@@ -170,6 +179,9 @@ const els = {
   editImageButton: document.querySelector("#editImageButton"),
   imageEditorModal: document.querySelector("#imageEditorModal"),
   imageEditorCanvas: document.querySelector("#imageEditorCanvas"),
+  imageEditorTools: document.querySelector("#imageEditorTools"),
+  imageEditorColor: document.querySelector("#imageEditorColor"),
+  imageEditorBrushSize: document.querySelector("#imageEditorBrushSize"),
   imageEditorZoom: document.querySelector("#imageEditorZoom"),
   imageEditorStatus: document.querySelector("#imageEditorStatus"),
   closeImageEditor: document.querySelector("#closeImageEditor"),
@@ -180,6 +192,7 @@ const els = {
   flipImageY: document.querySelector("#flipImageY"),
   resetImageEditor: document.querySelector("#resetImageEditor"),
   removeImageBackground: document.querySelector("#removeImageBackground"),
+  undoImageEdit: document.querySelector("#undoImageEdit"),
   exportPreviewModal: document.querySelector("#exportPreviewModal"),
   exportPreviewImage: document.querySelector("#exportPreviewImage"),
   closeExportPreview: document.querySelector("#closeExportPreview"),
@@ -277,6 +290,18 @@ function bindEvents() {
   els.flipImageY.addEventListener("click", () => updateImageEditor({ flipY: !state.editor.flipY }));
   els.resetImageEditor.addEventListener("click", resetImageEditor);
   els.removeImageBackground.addEventListener("click", removeImageBackground);
+  els.undoImageEdit.addEventListener("click", undoImageEdit);
+  els.imageEditorColor.addEventListener("input", () => {
+    state.editor.drawColor = els.imageEditorColor.value;
+  });
+  els.imageEditorBrushSize.addEventListener("input", () => {
+    state.editor.brushSize = normalizeNumber(els.imageEditorBrushSize.value, 1, 64, 16);
+  });
+  els.imageEditorTools.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-tool]");
+    if (!button) return;
+    setImageEditorTool(button.dataset.tool);
+  });
   els.imageEditorZoom.addEventListener("input", () => {
     updateImageEditor({ zoom: Number(els.imageEditorZoom.value) / 100 });
   });
@@ -692,15 +717,48 @@ function resetImageEditor() {
   state.editor.panX = 0;
   state.editor.panY = 0;
   state.editor.crop = null;
+  state.editor.tool = "move";
+  state.editor.imageEditHistory = [];
+  state.editor.strokeCanvas = null;
+  state.editor.strokeContext = null;
+  state.editor.strokeStart = null;
+  state.editor.lastImagePoint = null;
+  state.editor.strokeChanged = false;
   els.imageEditorZoom.value = "100";
+  els.undoImageEdit.disabled = true;
   els.imageEditorStatus.textContent = "保留主体颜色，去除与边缘连通的背景";
+  updateImageEditorToolButtons();
   drawImageEditor();
+}
+
+function setImageEditorTool(tool) {
+  state.editor.tool = tool;
+  updateImageEditorToolButtons();
+  const toolLabels = {
+    move: "拖拽画布或调整选区",
+    brush: "画笔会直接修改上传图片颜色",
+    eraser: "橡皮会把经过的位置擦成透明",
+    eyedropper: "在图片上点击取色",
+    fill: "在图片上点击填充相近连通区域",
+    line: "拖出一条直线",
+    rect: "拖出矩形描边",
+    select: "拖动框选区域，使用处理后的图片时按选区裁切"
+  };
+  els.imageEditorStatus.textContent = toolLabels[tool] || "选择工具后可编辑图片";
+  drawImageEditor();
+}
+
+function updateImageEditorToolButtons() {
+  els.imageEditorTools.querySelectorAll("[data-tool]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tool === state.editor.tool);
+  });
 }
 
 function bindImageEditorPointerEvents() {
   const canvas = els.imageEditorCanvas;
   canvas.addEventListener("pointerdown", (event) => {
     if (!state.editor.image) return;
+    if (handleImagePaintPointerDown(event)) return;
     const point = getEditorPoint(event);
     const crop = getEditorCropRect();
     const nearHandle = getCropHandle(point, crop);
@@ -712,6 +770,7 @@ function bindImageEditorPointerEvents() {
   });
   canvas.addEventListener("pointermove", (event) => {
     if (!state.editor.dragging) return;
+    if (handleImagePaintPointerMove(event)) return;
     const current = getEditorPoint(event);
     const start = state.editor.dragStart;
     const dx = current.x - start.x;
@@ -733,10 +792,109 @@ function bindImageEditorPointerEvents() {
   });
   ["pointerup", "pointercancel"].forEach((eventName) => {
     canvas.addEventListener(eventName, (event) => {
+      if (handleImagePaintPointerUp(event)) {
+        canvas.releasePointerCapture?.(event.pointerId);
+        return;
+      }
       state.editor.dragging = false;
       canvas.releasePointerCapture?.(event.pointerId);
     });
   });
+}
+
+function handleImagePaintPointerDown(event) {
+  const tool = state.editor.tool;
+  if (!["brush", "eraser", "eyedropper", "fill", "line", "rect"].includes(tool)) {
+    return false;
+  }
+
+  const imagePoint = getEditorImagePoint(getEditorPoint(event));
+  if (!imagePoint) return true;
+  event.preventDefault();
+
+  if (tool === "eyedropper") {
+    const color = sampleEditorImageColor(imagePoint);
+    if (color) {
+      state.editor.drawColor = color;
+      els.imageEditorColor.value = color;
+      els.imageEditorStatus.textContent = `已取色 ${color.toUpperCase()}`;
+    }
+    setImageEditorTool("brush");
+    return true;
+  }
+
+  if (tool === "fill") {
+    pushImageEditHistory();
+    commitEditorCanvas((context, width, height) => {
+      const imageData = context.getImageData(0, 0, width, height);
+      floodFillImageData(imageData, Math.floor(imagePoint.x), Math.floor(imagePoint.y), hexToRgb(state.editor.drawColor));
+      context.putImageData(imageData, 0, 0);
+    }, "已完成填充");
+    return true;
+  }
+
+  state.editor.dragging = true;
+  state.editor.dragMode = tool;
+  state.editor.strokeStart = imagePoint;
+  state.editor.lastImagePoint = imagePoint;
+  state.editor.strokeChanged = false;
+  state.editor.strokeCanvas = createEditorImageCanvas();
+  state.editor.strokeContext = state.editor.strokeCanvas.getContext("2d", { willReadFrequently: true });
+  pushImageEditHistory();
+  if (tool === "brush" || tool === "eraser") {
+    drawImageBrushSegment(imagePoint, imagePoint);
+  }
+  els.imageEditorCanvas.setPointerCapture?.(event.pointerId);
+  return true;
+}
+
+function handleImagePaintPointerMove(event) {
+  const tool = state.editor.dragMode;
+  if (!["brush", "eraser", "line", "rect"].includes(tool)) {
+    return false;
+  }
+  const imagePoint = getEditorImagePoint(getEditorPoint(event));
+  if (!imagePoint) return true;
+  event.preventDefault();
+
+  if (tool === "brush" || tool === "eraser") {
+    drawImageBrushSegment(state.editor.lastImagePoint || imagePoint, imagePoint);
+    state.editor.lastImagePoint = imagePoint;
+  } else {
+    state.editor.previewPoint = imagePoint;
+    drawImageEditor();
+  }
+  return true;
+}
+
+function handleImagePaintPointerUp(event) {
+  const tool = state.editor.dragMode;
+  if (!["brush", "eraser", "line", "rect"].includes(tool)) {
+    return false;
+  }
+  const imagePoint = getEditorImagePoint(getEditorPoint(event)) || state.editor.lastImagePoint || state.editor.strokeStart;
+  if (tool === "line" && state.editor.strokeContext && state.editor.strokeStart && imagePoint) {
+    drawImageShape("line", state.editor.strokeContext, state.editor.strokeStart, imagePoint);
+    state.editor.strokeChanged = true;
+  }
+  if (tool === "rect" && state.editor.strokeContext && state.editor.strokeStart && imagePoint) {
+    drawImageShape("rect", state.editor.strokeContext, state.editor.strokeStart, imagePoint);
+    state.editor.strokeChanged = true;
+  }
+  if (state.editor.strokeChanged && state.editor.strokeCanvas) {
+    replaceEditorImageFromCanvas(state.editor.strokeCanvas, "已修改图片颜色");
+  } else {
+    state.editor.imageEditHistory.pop();
+    els.undoImageEdit.disabled = state.editor.imageEditHistory.length === 0;
+  }
+  state.editor.dragging = false;
+  state.editor.dragMode = "pan";
+  state.editor.strokeCanvas = null;
+  state.editor.strokeContext = null;
+  state.editor.strokeStart = null;
+  state.editor.lastImagePoint = null;
+  state.editor.previewPoint = null;
+  return true;
 }
 
 function getEditorPoint(event) {
@@ -761,6 +919,173 @@ function getEditorLayout() {
     imageWidth,
     imageHeight
   };
+}
+
+function getEditorImagePoint(point) {
+  if (!state.editor.image) return null;
+  const layout = getEditorLayout();
+  const angle = (-state.editor.rotation * Math.PI) / 180;
+  const dx = point.x - layout.centerX;
+  const dy = point.y - layout.centerY;
+  const rotatedX = dx * Math.cos(angle) - dy * Math.sin(angle);
+  const rotatedY = dx * Math.sin(angle) + dy * Math.cos(angle);
+  const imageX = (state.editor.flipX ? -rotatedX : rotatedX) / layout.scale + state.editor.image.naturalWidth / 2;
+  const imageY = (state.editor.flipY ? -rotatedY : rotatedY) / layout.scale + state.editor.image.naturalHeight / 2;
+  if (
+    imageX < 0 ||
+    imageY < 0 ||
+    imageX >= state.editor.image.naturalWidth ||
+    imageY >= state.editor.image.naturalHeight
+  ) {
+    return null;
+  }
+  return { x: imageX, y: imageY };
+}
+
+function createEditorImageCanvas() {
+  const canvas = document.createElement("canvas");
+  canvas.width = state.editor.image.naturalWidth;
+  canvas.height = state.editor.image.naturalHeight;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(state.editor.image, 0, 0);
+  return canvas;
+}
+
+function pushImageEditHistory() {
+  if (!state.editor.image) return;
+  state.editor.imageEditHistory.push(state.editor.image.src);
+  if (state.editor.imageEditHistory.length > 20) {
+    state.editor.imageEditHistory.shift();
+  }
+  els.undoImageEdit.disabled = false;
+}
+
+function replaceEditorImageFromCanvas(canvas, message) {
+  const img = new Image();
+  img.onload = () => {
+    state.editor.image = img;
+    els.imageEditorStatus.textContent = message;
+    els.undoImageEdit.disabled = state.editor.imageEditHistory.length === 0;
+    drawImageEditor();
+  };
+  img.src = canvas.toDataURL("image/png");
+}
+
+function commitEditorCanvas(mutator, message) {
+  const canvas = createEditorImageCanvas();
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  mutator(context, canvas.width, canvas.height);
+  replaceEditorImageFromCanvas(canvas, message);
+}
+
+function undoImageEdit() {
+  const src = state.editor.imageEditHistory.pop();
+  if (!src) return;
+  const img = new Image();
+  img.onload = () => {
+    state.editor.image = img;
+    els.undoImageEdit.disabled = state.editor.imageEditHistory.length === 0;
+    els.imageEditorStatus.textContent = "已撤销上一次图片编辑";
+    drawImageEditor();
+  };
+  img.src = src;
+}
+
+function sampleEditorImageColor(point) {
+  const canvas = createEditorImageCanvas();
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const pixel = context.getImageData(Math.floor(point.x), Math.floor(point.y), 1, 1).data;
+  return rgbToHex({ r: pixel[0], g: pixel[1], b: pixel[2] });
+}
+
+function drawImageBrushSegment(from, to) {
+  const context = state.editor.strokeContext;
+  if (!context || !from || !to) return;
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.lineWidth = state.editor.brushSize;
+  if (state.editor.dragMode === "eraser") {
+    context.globalCompositeOperation = "destination-out";
+  } else {
+    context.strokeStyle = state.editor.drawColor;
+  }
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
+  context.restore();
+  state.editor.strokeChanged = true;
+  replaceEditorLiveStroke();
+}
+
+function replaceEditorLiveStroke() {
+  if (!state.editor.strokeCanvas) return;
+  const img = new Image();
+  img.onload = () => {
+    state.editor.image = img;
+    drawImageEditor();
+  };
+  img.src = state.editor.strokeCanvas.toDataURL("image/png");
+}
+
+function drawImageShape(type, context, from, to) {
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.lineWidth = state.editor.brushSize;
+  context.strokeStyle = state.editor.drawColor;
+  if (type === "line") {
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+  } else {
+    const x = Math.min(from.x, to.x);
+    const y = Math.min(from.y, to.y);
+    context.strokeRect(x, y, Math.abs(to.x - from.x), Math.abs(to.y - from.y));
+  }
+  context.restore();
+}
+
+function floodFillImageData(imageData, startX, startY, fillColor) {
+  const { data, width, height } = imageData;
+  if (startX < 0 || startY < 0 || startX >= width || startY >= height) return;
+  const startIndex = (startY * width + startX) * 4;
+  const target = {
+    r: data[startIndex],
+    g: data[startIndex + 1],
+    b: data[startIndex + 2],
+    a: data[startIndex + 3]
+  };
+  if (colorDistance(target, fillColor) < 2 && target.a === 255) return;
+  const tolerance = 38;
+  const visited = new Uint8Array(width * height);
+  const queue = [startY * width + startX];
+  visited[startY * width + startX] = 1;
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const index = queue[cursor];
+    const pixelIndex = index * 4;
+    const pixel = { r: data[pixelIndex], g: data[pixelIndex + 1], b: data[pixelIndex + 2], a: data[pixelIndex + 3] };
+    if (Math.abs(pixel.a - target.a) > tolerance || colorDistance(pixel, target) > tolerance) continue;
+    data[pixelIndex] = fillColor.r;
+    data[pixelIndex + 1] = fillColor.g;
+    data[pixelIndex + 2] = fillColor.b;
+    data[pixelIndex + 3] = 255;
+    const x = index % width;
+    const y = Math.floor(index / width);
+    [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].forEach(([nx, ny]) => {
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) return;
+      const nextIndex = ny * width + nx;
+      if (visited[nextIndex]) return;
+      visited[nextIndex] = 1;
+      queue.push(nextIndex);
+    });
+  }
+}
+
+function colorDistance(a, b) {
+  return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
 }
 
 function getEditorCropRect() {
@@ -841,6 +1166,41 @@ function drawImageEditor() {
   editorCtx.fillStyle = "#ffffff";
   editorCtx.fillRect(crop.x + crop.width - 12, crop.y + crop.height - 12, 24, 24);
   editorCtx.restore();
+
+  if (["line", "rect"].includes(state.editor.dragMode) && state.editor.strokeStart && state.editor.previewPoint) {
+    drawImageShapePreview(editorCtx, state.editor.strokeStart, state.editor.previewPoint);
+  }
+}
+
+function drawImageShapePreview(context, fromImagePoint, toImagePoint) {
+  const from = getEditorCanvasPoint(fromImagePoint);
+  const to = getEditorCanvasPoint(toImagePoint);
+  if (!from || !to) return;
+  context.save();
+  context.strokeStyle = state.editor.drawColor;
+  context.lineWidth = 2;
+  context.setLineDash([8, 6]);
+  if (state.editor.dragMode === "line") {
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+  } else {
+    context.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
+  }
+  context.restore();
+}
+
+function getEditorCanvasPoint(imagePoint) {
+  if (!state.editor.image) return null;
+  const layout = getEditorLayout();
+  const imageX = (imagePoint.x - state.editor.image.naturalWidth / 2) * (state.editor.flipX ? -1 : 1) * layout.scale;
+  const imageY = (imagePoint.y - state.editor.image.naturalHeight / 2) * (state.editor.flipY ? -1 : 1) * layout.scale;
+  const angle = (state.editor.rotation * Math.PI) / 180;
+  return {
+    x: layout.centerX + imageX * Math.cos(angle) - imageY * Math.sin(angle),
+    y: layout.centerY + imageX * Math.sin(angle) + imageY * Math.cos(angle)
+  };
 }
 
 function applyImageEditor() {

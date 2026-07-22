@@ -397,6 +397,10 @@ body.modal-open {
   gap: 8px;
 }
 
+.image-paint-tools {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .tool-button {
   display: grid;
   place-items: center;
@@ -419,6 +423,31 @@ body.modal-open {
 .tool-button:hover {
   border-color: var(--accent);
   color: var(--accent-strong);
+}
+
+.tool-button.active {
+  border-color: var(--accent);
+  background: #d8f1ef;
+  color: var(--accent-strong);
+}
+
+.editor-color-field {
+  display: grid;
+  grid-template-columns: 1fr 48px;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.editor-color-field input {
+  width: 48px;
+  height: 38px;
+  padding: 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
 .editor-range {
